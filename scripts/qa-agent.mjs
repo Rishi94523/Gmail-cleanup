@@ -12,6 +12,7 @@ const browser = await chromium.launch({ executablePath: 'C:/Program Files (x86)/
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } }); const errors = []; page.on('pageerror', e => errors.push(e.message));
   const state = { connected: true, configured: true, aiConfigured: true, aiProvider: 'nebius', aiModel: 'nvidia/Nemotron-3.5-Super-VL', schedulerActive: false, csrf: 'fixture-only', email: 'test@example.invalid', rules: { ...DEFAULT_RULES }, runs: [], subscriptions: [], plan: null, totals: {} }; let learned = false; let ran = false;
+  const tray = { questions: [], memories: [], discovery: null, questionsTotal: 0 };
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/agent/run') {
@@ -21,7 +22,16 @@ try {
     let json;
     if (path === '/api/status') json = state;
     else if (path === '/api/mailbox') json = { unread: 7590, messages: 7626 };
-    else if (path === '/api/agent/learn') { assert.equal(route.request().postDataJSON().consent, true); learned = true; json = { inspected: 40, summary: 'Your inbox includes job opportunities.', suggestions: [{ topic: 'jobs', note: 'Would you like to keep recruiting emails?' }] }; }
+    else if (path === '/api/agent/questions') json = tray;
+    else if (path === '/api/agent/learn') {
+      assert.equal(route.request().postDataJSON().consent, true); learned = true; json = { inspected: 40, summary: 'Your inbox includes job opportunities.', suggestions: [{ topic: 'jobs', note: 'Would you like to keep recruiting emails?' }] };
+      tray.discovery = json; tray.questionsTotal = 1; tray.questions = [{ id: 'question-one', version: 1, question: 'Do you want these product announcements?', reason: 'These might be unwanted signup marketing.', scope: { sender: 'offers@example.invalid', listId: 'updates.example.invalid' }, sample: { subject: 'A new product announcement' }, options: [{ id: 'keep', label: 'Always keep this list' }, { id: 'read', label: 'Mark future low-priority mail as read' }, { id: 'later', label: 'Ask me tomorrow' }] }];
+    }
+    else if (path === '/api/agent/questions/answer') {
+      const answer = route.request().postDataJSON(); assert.equal(answer.option, 'read');
+      tray.memories = [{ id: 'memory-one', version: 1, action: answer.option, scope: tray.questions[0].scope, explanation: tray.questions[0].question }]; tray.questions = []; tray.questionsTotal = 0; json = { status: 'saved' };
+    }
+    else if (path === '/api/agent/memories/edit') { const change = route.request().postDataJSON(); tray.memories[0].action = change.action; tray.memories[0].version++; json = { status: 'saved' }; }
     else if (path === '/api/rules') { state.rules = route.request().postDataJSON(); json = { rules: state.rules }; }
     else if (path === '/api/agent/history') json = { logs: [{ decisions: [{ subject: 'Sale', action: 'read', reason: 'Low priority' }] }] };
     else throw new Error(`Unexpected request ${path}`);
@@ -31,12 +41,27 @@ try {
   assert.equal(await page.locator('#agent-start').isDisabled(), true);
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();
   assert.equal(await page.locator('#agent-learn').isDisabled(), true);
-  await page.locator('#agent-consent').check(); await page.locator('#agent-learn').click(); await page.waitForFunction(() => document.querySelector('#agent-suggestions').textContent.includes('40 messages'));
+  await page.locator('#agent-consent').check(); await page.waitForFunction(() => document.querySelector('#agent-suggestions').textContent.includes('40 messages'));
   assert.equal(learned, true); assert.equal(ran, false);
   await page.locator('#pref-interests').fill('Software engineering roles');
   await page.locator('#save-preferences').click(); await page.waitForSelector('#page-overview:not([hidden])');
   assert.equal(state.rules.agent.action, 'read'); assert.equal(state.rules.agent.enabled, true); assert.equal(state.rules.daily, false);
   assert.equal(state.rules.agent.consentProvider, 'nebius');
+  assert.equal(await page.locator('#question-count').textContent(), '1');
+  await page.waitForFunction(() => document.body.getAttribute('aria-busy') === 'false');
+  await page.evaluate(() => { document.querySelector('#toast').hidden = true; });
+  await page.getByRole('button', { name: /Questions/ }).click();
+  await page.screenshot({ path: resolve(output, 'questions-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Mobile questions overflow');
+  await page.screenshot({ path: resolve(output, 'questions-mobile.png'), fullPage: true });
+  await page.getByLabel('Mark future low-priority mail as read', { exact: true }).check();
+  await page.getByRole('button', { name: 'Save my answer' }).click(); await page.waitForFunction(() => document.querySelector('#question-count').textContent === '0');
+  await page.getByRole('button', { name: 'Preferences', exact: true }).click();
+  await page.locator('#learned-preferences select').selectOption('keep'); await page.locator('#learned-preferences button[type=submit]').click();
+  await page.waitForFunction(() => document.querySelector('#learned-preferences small').textContent.includes('Version 2'));
+  assert.equal(tray.memories[0].action, 'keep');
+  await page.setViewportSize({ width: 1440, height: 1050 }); await page.getByRole('button', { name: 'Overview', exact: true }).click();
   await page.locator('#agent-start').click(); await page.waitForFunction(() => document.querySelector('#agent-stage').textContent === 'Run finished.');
   assert.equal(ran, true); assert.equal(await page.locator('#agent-decisions script').count(), 0);
   assert.ok((await page.locator('#agent-counts').textContent()).includes('1 changed'));
@@ -56,5 +81,5 @@ try {
   assert.equal(await page.locator('#agent-consent').isChecked(), false);
   assert.equal(await page.locator('#agent-start').isDisabled(), true);
   assert.deepEqual(errors, []);
-  console.log('PASS desktop/mobile agent flow, consent, AI preference discovery, saved permissions, streamed decisions, escaped content, and readable responsive layout. Gmail and AI were test fixtures; no live email actions.');
+  console.log('PASS automatic discovery after consent, persistent MCQ tray, answering and editing learned preferences, desktop/mobile layout, provider consent, and streamed decisions. Gmail and AI were test fixtures; no live email actions.');
 } finally { await browser.close(); await app.close(); }

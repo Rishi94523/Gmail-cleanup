@@ -17,7 +17,8 @@ A Gmail agent that learns what matters to a person and maintains their unread in
 - AI decisions use user context rather than treating age or a Gmail category as sufficient permission.
 - Protect starred/important mail and user-approved senders. Treat personal messages, financial/legal/security mail, bookings, and receipts conservatively; age alone is insufficient.
 - Queue uncertain classifications for review.
-- Require approval for unsubscribe requests; separately allow sender-specific future automation.
+- Require explicit permission for intelligent automatic unsubscribe. Otherwise request approval. OTPs, wanted publications, mixed-purpose mail and uncertain intent stay protected.
+- Ask persistent multiple-choice questions for unclear sender/list preferences; continue without changing those messages. User answers guide future arrivals and remain editable.
 - Never permanently delete mail in the first version.
 - Preserve each message's previous labels and unread state for undo. Explain that unsubscribe cannot be undone by restoring labels.
 

@@ -10,14 +10,16 @@ let busy = false;
 let page = 'overview';
 let toastTimer;
 let approval = null;
+let learningState = { questions: [], memories: [], discovery: null };
+let discoveryStarted = false;
 
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 5500); }
 function error(message) { $('#error-banner').textContent = message; $('#error-banner').hidden = false; $('#error-banner').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
 function showPage(name) {
-  page = ['overview', 'subscriptions', 'rules', 'activity'].includes(name) ? name : 'overview';
+  page = ['overview', 'subscriptions', 'rules', 'activity', 'questions'].includes(name) ? name : 'overview';
   $$('.page').forEach(el => { el.hidden = el.id !== `page-${page}`; });
   $$('.nav-item').forEach(el => { el.classList.toggle('active', el.dataset.page === page); if (el.dataset.page === page) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); });
-  $('#page-name').textContent = { overview: 'Overview', subscriptions: 'Subscriptions', rules: 'Preferences', activity: 'Activity' }[page];
+  $('#page-name').textContent = { overview: 'Overview', subscriptions: 'Subscriptions', rules: 'Preferences', activity: 'Activity', questions: 'Questions' }[page];
   history.replaceState(null, '', `/#${page}`);
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
@@ -32,6 +34,7 @@ function setBusy(value, button, label) {
   if (button) { if (value) { button.dataset.originalText = button.textContent; button.textContent = label; button.disabled = true; } else { button.textContent = button.dataset.originalText; button.disabled = !state?.connected; } }
   document.body.setAttribute('aria-busy', String(value));
   if (state) renderAgentControls();
+  if (!value && state) queueMicrotask(() => maybeDiscover());
 }
 async function operation(button, label, fn) {
   if (busy) return;
@@ -124,6 +127,9 @@ async function refresh(mailbox = false) {
     try { const profile = await request('/api/mailbox'); $('#metric-unread').textContent = number(profile.unread); $('#unread-caption').textContent = `Across ${number(profile.messages)} emails in Gmail`; }
     catch (err) { $('#unread-caption').textContent = 'Mailbox count unavailable'; error(err.message); }
   }
+  if (state.connected) await loadLearning();
+  else { learningState = { questions: [], memories: [], discovery: null }; renderLearning(); }
+  queueMicrotask(() => maybeDiscover());
 }
 function rulesInput() {
   return { days: Number($('#rule-days').value), categories: $$('input[name=category]:checked').map(input => input.value), archive: $('#rule-archive').checked, markRead: $('#rule-read').checked, protectedSenders: $('#rule-protected').value.split(/[\n,]+/).map(s => s.trim()).filter(Boolean), daily: $('#rule-daily').checked, hour: Number($('#rule-hour').value), timezone: $('#rule-zone').value, aiEnabled: $('#rule-ai').checked, aiConsentProvider: $('#rule-ai').checked ? (state.aiProvider || 'openrouter') : '' };
@@ -183,7 +189,7 @@ if (auth) {
 showPage(location.hash.slice(1));
 refresh(true).then(() => { if (auth === 'connected' && !state.rules.agent?.enabled) showPage('rules'); }).catch(err => error(`The app could not load: ${err.message}`));
 
-const agentDefaults = { enabled: false, consent: false, consentProvider: '', keepJobs: true, coldMail: 'exceptional', keepPeople: true, keepNewsletters: true, action: 'read', exceptions: '', interests: '' };
+const agentDefaults = { enabled: false, consent: false, consentProvider: '', keepJobs: true, coldMail: 'exceptional', keepPeople: true, keepNewsletters: true, autoUnsubscribe: false, action: 'read', exceptions: '', interests: '' };
 function providerName() { return state.aiProvider === 'nebius' ? 'Nebius Token Factory' : 'OpenRouter'; }
 for (let hour = 0; hour < 24; hour++) $('#pref-hour').add(new Option(`${String(hour).padStart(2, '0')}:00`, hour));
 function renderAgentControls() {
@@ -202,22 +208,27 @@ function renderAgentControls() {
 }
 function renderAgentPreferences() {
   const p = { ...agentDefaults, ...state.rules.agent };
-  for (const [key, id] of [['consent','agent-consent'], ['keepJobs','pref-jobs'], ['keepPeople','pref-people'], ['keepNewsletters','pref-newsletters']]) $(`#${id}`).checked = p[key];
+  for (const [key, id] of [['consent','agent-consent'], ['keepJobs','pref-jobs'], ['keepPeople','pref-people'], ['keepNewsletters','pref-newsletters'], ['autoUnsubscribe','pref-auto-unsubscribe']]) $(`#${id}`).checked = p[key];
   if (p.consentProvider !== (state.aiProvider || 'openrouter')) $('#agent-consent').checked = false;
   for (const [key, id] of [['coldMail','pref-cold'], ['action','pref-action'], ['exceptions','pref-exceptions'], ['interests','pref-interests']]) $(`#${id}`).value = p[key];
   $('#pref-daily').checked = state.rules.daily; $('#pref-hour').value = state.rules.hour; $('#pref-zone').value = state.rules.timezone;
   renderAgentControls();
 }
-$('#agent-consent').addEventListener('change', renderAgentControls);
-$('#agent-learn').addEventListener('click', () => operation($('#agent-learn'), 'Learning your inbox…', async () => {
+$('#agent-consent').addEventListener('change', () => { renderAgentControls(); maybeDiscover(); });
+function maybeDiscover() {
+  if (!state?.connected || !state.aiConfigured || busy || discoveryStarted || learningState.discovery || !$('#agent-consent').checked) return;
+  discoveryStarted = true;
+  operation($('#agent-learn'), 'Learning your inbox…', async () => {
   const learned = await request('/api/agent/learn', { consent: $('#agent-consent').checked, provider: state.aiProvider || 'openrouter' });
-  $('#agent-suggestions').innerHTML = `<strong>${escape(learned.summary)}</strong><ul>${learned.suggestions.map(s => `<li>${escape(s.note)}</li>`).join('')}</ul><p>Based on ${number(learned.inspected)} messages. Adjust the preferences below; no emails were changed.</p>`;
-}));
+  renderDiscovery(learned); await loadLearning();
+  });
+}
+$('#agent-learn').addEventListener('click', () => { discoveryStarted = false; learningState.discovery = null; maybeDiscover(); });
 $('#preferences-form').addEventListener('submit', event => {
   event.preventDefault();
   const consent = $('#agent-consent').checked;
-  const agent = { consent, consentProvider: consent ? (state.aiProvider || 'openrouter') : '', enabled: consent && state.aiConfigured, keepJobs: $('#pref-jobs').checked, keepPeople: $('#pref-people').checked, keepNewsletters: $('#pref-newsletters').checked, coldMail: $('#pref-cold').value, action: $('#pref-action').value, exceptions: $('#pref-exceptions').value, interests: $('#pref-interests').value };
-  const rules = { ...state.rules, agent, aiEnabled: state.rules.aiEnabled && state.rules.aiConsentProvider === (state.aiProvider || 'openrouter'), daily: state.schedulerActive && $('#pref-daily').checked, hour: Number($('#pref-hour').value), timezone: $('#pref-zone').value };
+  const agent = { consent, consentProvider: consent ? (state.aiProvider || 'openrouter') : '', enabled: consent && state.aiConfigured, keepJobs: $('#pref-jobs').checked, keepPeople: $('#pref-people').checked, keepNewsletters: $('#pref-newsletters').checked, autoUnsubscribe: $('#pref-auto-unsubscribe').checked, coldMail: $('#pref-cold').value, action: $('#pref-action').value, exceptions: $('#pref-exceptions').value, interests: $('#pref-interests').value };
+  const rules = { ...state.rules, agent, aiEnabled: state.rules.aiEnabled && state.rules.aiConsentProvider === (state.aiProvider || 'openrouter'), daily: agent.enabled && state.schedulerActive && $('#pref-daily').checked, hour: Number($('#pref-hour').value), timezone: $('#pref-zone').value };
   operation($('#save-preferences'), 'Saving…', async () => { await request('/api/rules', rules); await refresh(); showPage('overview'); toast(agent.enabled ? 'Preferences saved. Start your agent when you’re ready.' : 'Preferences saved. AI needs to be configured before the agent can run.'); });
 });
 $('#agent-start').addEventListener('click', () => operation($('#agent-start'), 'Agent working…', async () => {
@@ -232,17 +243,18 @@ $('#agent-start').addEventListener('click', () => operation($('#agent-start'), '
       while ((newline = buffer.indexOf('\n')) >= 0) {
         const event = JSON.parse(buffer.slice(0, newline)); buffer = buffer.slice(newline + 1);
         if (event.type === 'heartbeat') continue;
+        if (event.type === 'question') await loadLearning();
         if (event.type === 'error') throw new Error(event.message);
         if (event.type === 'stage') $('#agent-stage').textContent = event.message;
         if (event.total) $('#agent-meter').max = event.total;
         if (event.inspected !== undefined) $('#agent-meter').value = event.inspected;
         if (event.type === 'decision') {
-          const labels = { keep: 'Kept', read: 'Marked read', archive: 'Archived', both: 'Read & archived' };
+          const labels = { keep: 'Kept', read: 'Marked read', archive: 'Archived', both: 'Read & archived', unsubscribe: 'Unsubscribe requested' };
           $('#agent-decisions').insertAdjacentHTML('afterbegin', `<div class="list-row"><div class="row-main"><strong>${escape(labels[event.action])} · ${escape(event.subject)}</strong><p>${escape(event.reason)}</p></div></div>`);
           while ($('#agent-decisions').children.length > 8) $('#agent-decisions').lastElementChild.remove();
           $('#agent-counts').textContent = `${number(event.inspected)} read · ${number(event.changed)} changed · ${number(event.kept)} kept`;
         }
-        if (event.type === 'complete') { completed = true; $('#agent-stage').textContent = event.moreAvailable ? 'Run finished. More unread mail remains.' : 'Run finished.'; $('#agent-counts').textContent = `${number(event.inspected)} inspected · ${number(event.changed)} changed · ${number(event.kept)} kept`; }
+        if (event.type === 'complete') { completed = true; $('#agent-stage').textContent = event.moreAvailable ? 'Run finished. More unread mail remains.' : 'Run finished.'; $('#agent-counts').textContent = `${number(event.inspected)} inspected · ${number(event.changed)} changed · ${number(event.kept)} kept · ${number(event.unsubscribed)} unsubscribe requests`; }
       }
     }
     if (!completed) throw new Error('Connection interrupted. Check Activity before starting again.');
@@ -257,3 +269,41 @@ detailsButton.addEventListener('click', () => operation(detailsButton, 'Loading 
   const result = await request('/api/agent/history', {});
   decisionHistory.innerHTML = result.logs.length ? result.logs.map(log => `<details><summary>Run · ${number(log.decisions.length)} decisions</summary>${log.decisions.map(d => `<div class="agent-log-entry"><strong>${escape(d.subject)}</strong><p>${escape(d.action)} · ${escape(d.reason)}</p></div>`).join('')}</details>`).join('') : '<p>No agent decisions yet.</p>';
 }));
+
+let learningSignature = '';
+function renderDiscovery(discovery) {
+  if (!discovery) return;
+  $('#agent-suggestions').innerHTML = `<strong>${escape(discovery.summary)}</strong><ul>${discovery.suggestions.map(s => `<li>${escape(s.note)}</li>`).join('')}</ul><p>Based on ${number(discovery.inspected)} messages. Adjust your preferences below; no emails were changed.</p>`;
+}
+async function loadLearning() {
+  if (!state?.connected) return;
+  const result = await request('/api/agent/questions');
+  const signature = JSON.stringify(result);
+  if (signature === learningSignature) return;
+  learningSignature = signature; learningState = result; renderLearning();
+}
+function renderLearning() {
+  const count = learningState.questionsTotal ?? learningState.questions.length;
+  $('#question-count').textContent = number(count); $('#question-notice').hidden = count === 0;
+  $('#question-notice-title').textContent = `${number(count)} ${count === 1 ? 'question from your agent' : 'questions from your agent'}`;
+  $('#questions-tray').innerHTML = count ? learningState.questions.map(q => `<form class="question-card" data-question="${escape(q.id)}"><p class="eyebrow">${escape(q.scope.listId || q.scope.sender)}</p><h2>${escape(q.question)}</h2><p>${escape(q.reason)}</p><p class="question-context">Example: ${escape(q.sample.subject)}. Left unchanged.</p>${q.options.map(o => `<label class="question-option"><input type="radio" name="answer" value="${escape(o.id)}" required><span>${escape(o.label)}</span></label>`).join('')}<button class="primary" type="submit">Save my answer →</button><p>Applies to future messages. Previously held emails stay as they are.</p></form>`).join('') : empty('You’re all caught up.', 'Questions about uncertain mail will wait here. The agent leaves those emails alone.');
+  const labels = { keep: 'Keep in inbox', read: 'Mark low-priority mail read', archive: 'Archive low-priority mail', both: 'Mark read and archive low-priority mail', unsubscribe: 'Unsubscribe from unwanted marketing on this list' };
+  $('#learned-preferences').innerHTML = learningState.memories.length ? learningState.memories.map(m => `<form class="memory-card" data-memory="${escape(m.id)}"><strong>${escape(m.scope.listId || m.scope.sender)}</strong><p>${escape(m.explanation)}</p><label>Future handling<select name="action">${Object.entries(labels).filter(([action]) => action !== 'unsubscribe' || m.scope.listId).map(([action, label]) => `<option value="${action}" ${action === m.action ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="agent-actions"><button class="secondary" type="submit">Save change</button><button class="text-button" type="button" data-remove-memory="${escape(m.id)}">Forget this preference</button></div><small>Version ${number(m.version)} · still follows your allowed actions and protections.</small></form>`).join('') : '<p>As you answer questions, your preferences appear here.</p>';
+  renderDiscovery(learningState.discovery);
+}
+$('#questions-tray').addEventListener('submit', event => {
+  event.preventDefault(); const form = event.target.closest('[data-question]'); if (!form) return;
+  const question = learningState.questions.find(q => q.id === form.dataset.question); const option = new FormData(form).get('answer');
+  operation(form.querySelector('button'), 'Saving…', async () => { await request('/api/agent/questions/answer', { questionId: question.id, version: question.version, option }); await loadLearning(); toast(option === 'later' ? 'Question saved for tomorrow. Emails left unchanged.' : 'Preference saved for future mail. Earlier emails left unchanged.'); });
+});
+$('#learned-preferences').addEventListener('submit', event => {
+  event.preventDefault(); const form = event.target.closest('[data-memory]'); if (!form) return;
+  const memory = learningState.memories.find(m => m.id === form.dataset.memory);
+  operation(form.querySelector('button'), 'Saving…', async () => { await request('/api/agent/memories/edit', { memoryId: memory.id, version: memory.version, action: new FormData(form).get('action') }); await loadLearning(); toast('Preference updated for future mail.'); });
+});
+$('#learned-preferences').addEventListener('click', event => {
+  const button = event.target.closest('[data-remove-memory]'); if (!button) return;
+  const memory = learningState.memories.find(m => m.id === button.dataset.removeMemory);
+  operation(button, 'Removing…', async () => { await request('/api/agent/memories/edit', { memoryId: memory.id, version: memory.version, remove: true }); await loadLearning(); toast('Preference removed. Earlier held emails stay unchanged.'); });
+});
+setInterval(() => { if (state?.connected && !busy && !document.hidden) loadLearning().catch(() => {}); }, 60000);

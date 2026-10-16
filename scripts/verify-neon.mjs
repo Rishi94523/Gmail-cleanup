@@ -6,6 +6,7 @@ import { openPostgresStore } from '../server/postgres-store.js';
 import { encryption, randomToken, hash } from '../server/security.js';
 import { DEFAULT_RULES } from '../server/rules.js';
 import { DEFAULT_PREFERENCES, runAgent } from '../server/agent.js';
+import { askPreference } from '../server/learning.js';
 
 // This destructive-fixture test is intentionally restricted to our expiring
 // development branch. It never seeds mock accounts in production.
@@ -81,10 +82,25 @@ try {
   await first.service.undo(owner, result.runId);
   assert.ok(messages.get('one').labelIds.includes('UNREAD'));
   console.log('PASS autonomous agent decisions, durable assessment records, and undo on real Neon (Gmail and AI test adapters)');
+  const beforeAnswerWrites = writes;
+  const question = await askPreference(first.service, owner, messages.get('one'), (await first.service.account(owner)).rules.agent, { question: 'Do you want mail from this sender?', reason: 'Test-only uncertainty.' });
+  const tray = await call(second, '/api/agent/questions');
+  assert.equal(tray.body.questions[0].id, question.id);
+  assert.equal((await call(second, '/api/agent/questions', undefined, otherToken)).body.questions.length, 0);
+  const answer = { questionId: question.id, version: tray.body.questions[0].version, option: 'read' };
+  assert.equal((await call(first, '/api/agent/questions/answer', answer, otherToken)).status, 400);
+  assert.equal((await call(first, '/api/agent/questions/answer', answer)).status, 200);
+  const saved = (await call(second, '/api/agent/questions')).body.memories[0];
+  assert.equal(saved.action, 'read'); assert.equal(saved.applies, 'future_messages_only');
+  assert.equal((await call(second, '/api/agent/memories/edit', { memoryId: saved.id, version: saved.version, action: 'keep' })).status, 200);
+  assert.equal((await call(first, '/api/agent/memories/edit', { memoryId: saved.id, version: saved.version, action: 'read' })).status, 400);
+  assert.equal(writes, beforeAnswerWrites);
+  assert.equal((await store.get('SELECT count(*) AS n FROM agent_holds WHERE account_id=?', owner)).n, 1);
+  console.log('PASS real Neon/HTTP question persistence across replicas, account isolation, future-only answers, editable versioned memory, and unchanged held mail');
   console.log('Neon end-to-end verification passed. Real database and HTTP app; Gmail provider was simulated and no real emails were accessed.');
 } finally {
   if (store) for (const id of [owner, other]) await store.transaction(async tx => {
-    for (const table of ['changes', 'plans', 'runs', 'subscriptions', 'locks', 'sessions', 'agent_assessments']) await tx.run(`DELETE FROM ${table} WHERE account_id=?`, id);
+    for (const table of ['changes', 'plans', 'runs', 'subscriptions', 'locks', 'sessions', 'agent_assessments', 'agent_questions', 'preference_memories', 'preference_events', 'agent_holds', 'subscription_actions', 'agent_discoveries']) await tx.run(`DELETE FROM ${table} WHERE account_id=?`, id);
     await tx.run('DELETE FROM accounts WHERE id=?', id);
   });
   await Promise.all(applications.map(app => app.close()));

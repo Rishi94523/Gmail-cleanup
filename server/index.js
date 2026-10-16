@@ -10,6 +10,7 @@ import { InboxService } from './service.js';
 import { jsonFetch } from './gmail.js';
 import { learnInbox, runAgent } from './agent.js';
 import { aiConfig } from './ai.js';
+import { learningTray, answerPreference, editMemory } from './learning.js';
 
 export async function createApp(options = {}) {
   const config = { port: Number(process.env.PORT || 3000), host: process.env.HOST || '127.0.0.1', appUrl: process.env.APP_URL || 'http://localhost:3000', clientId: process.env.GOOGLE_CLIENT_ID || '', clientSecret: process.env.GOOGLE_CLIENT_SECRET || '', encryptionKey: process.env.TOKEN_ENCRYPTION_KEY || '', ...aiConfig(), databaseUrl: process.env.DATABASE_URL || '', scheduler: !process.env.K_SERVICE && process.env.ENABLE_LOCAL_SCHEDULER !== 'false', ...options.config };
@@ -95,6 +96,7 @@ export async function createApp(options = {}) {
       if (url.pathname.startsWith('/api/')) {
         if (!session?.account_id || !service) return json(res, 401, { error: 'Connect Gmail to continue.' });
         const id = session.account_id;
+        if (req.method === 'GET' && url.pathname === '/api/agent/questions') return json(res, 200, await learningTray(service, id));
         if (req.method === 'GET' && url.pathname === '/api/mailbox') {
           const gmail = service.client(await service.account(id));
           const [profile, labels] = await Promise.all([gmail('profile'), gmail('labels/UNREAD')]);
@@ -103,6 +105,8 @@ export async function createApp(options = {}) {
         if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
         if (req.headers.origin !== origin || req.headers['x-csrf-token'] !== session.csrf || !req.headers['content-type']?.startsWith('application/json')) return json(res, 403, { error: 'Request could not be verified. Reload the app and try again.' });
         const input = await body(req);
+        if (url.pathname === '/api/agent/questions/answer') return json(res, 200, await answerPreference(service, id, input));
+        if (url.pathname === '/api/agent/memories/edit') return json(res, 200, await editMemory(service, id, input));
         if (url.pathname === '/api/agent/learn') return json(res, 200, await service.locked(id, () => learnInbox(service, id, input.consent, input.provider)));
         if (url.pathname === '/api/agent/history') {
           const logs = await store.all("SELECT payload FROM plans WHERE account_id=? AND status='agent_log' ORDER BY created DESC LIMIT 10", id);
@@ -133,7 +137,7 @@ export async function createApp(options = {}) {
           const revoked = await fetch('https://oauth2.googleapis.com/revoke', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: account.tokens.refresh_token }), signal: AbortSignal.timeout(15000) });
           if (!revoked.ok) throw new Error('Agent paused, but Google revocation failed. Try disconnecting again or remove app access from your Google account.');
           await store.transaction(async tx => {
-            for (const table of ['changes', 'plans', 'runs', 'subscriptions', 'agent_assessments']) await tx.run(`DELETE FROM ${table} WHERE account_id=?`, id);
+            for (const table of ['changes', 'plans', 'runs', 'subscriptions', 'agent_assessments', 'agent_questions', 'preference_memories', 'preference_events', 'agent_holds', 'subscription_actions', 'agent_discoveries']) await tx.run(`DELETE FROM ${table} WHERE account_id=?`, id);
             await tx.run('DELETE FROM sessions WHERE account_id=?', id); await tx.run('DELETE FROM accounts WHERE id=?', id);
           });
           res.setHeader('Set-Cookie', cookie('', 0)); return { success: true };

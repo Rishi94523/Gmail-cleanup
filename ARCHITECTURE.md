@@ -5,7 +5,8 @@
 - JavaScript Node.js backend with asynchronous REST/storage operations and shared PostgreSQL persistence on Neon; SQLite remains a local/test fallback.
 - Google OAuth 2.0 authorization-code flow with state, PKCE, offline access, encrypted tokens, and CSRF-protected writes.
 - Configurable Gmail queries, bounded/paginated metadata scans, explicit cleanup approvals, per-message label deltas, and undo.
-- User-approved HTTPS one-click unsubscribe requests for supported headers; manual Gmail review otherwise.
+- Explicitly permitted intelligent automatic unsubscribe for consistent unwanted marketing lists, with transactional/publication protections and authenticated one-click transport; sender-specific manual approval remains available.
+- Persistent, encrypted questions and explicit user preference memories in Postgres, scoped to account and sender/list. Held mail is never retroactively changed by answers; edits use versions and an audit trail.
 - Shared Nebius/OpenRouter JSON transport selected with `AI_PROVIDER`, provider-specific keys/models, explicit provider-bound data-sharing consent, and validated model decisions. Jev's typed API remains a future adapter/evaluation task.
 - Local timezone-aware scheduler with durable account/day claims and account-level job leases.
 - React/TypeScript product preview and a Dockerfile for the local backend.

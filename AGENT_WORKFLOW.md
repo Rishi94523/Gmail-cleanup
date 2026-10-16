@@ -5,12 +5,15 @@ The main dashboard now asks for preferences, then runs the agent without asking 
 ## Implemented locally
 
 - Explicit AI-processing consent. Discovery sends sender/subject metadata from up to 40 inbox messages to the selected provider and asks for suggestions; it does not change mail or silently enable suggested preferences. Provider changes require renewed consent, and failures never switch providers automatically.
-- Preferences for recruiting/job opportunities, cold outreach, people previously emailed, newsletters, interests, exceptions, permitted action, and daily schedule.
-- Default permitted action is mark read. Archive and mark read plus archive are separate choices. No delete, trash, send, or automatic unsubscribe tool is available to this agent.
+- Preferences for recruiting/job opportunities, cold outreach, people previously emailed, newsletters, interests, exceptions, permitted action, automatic unsubscribe, and daily schedule.
+- Default permitted action is mark read. Archive and mark read plus archive are separate choices. Automatic unsubscribe is a separate opt-in, with a supported one-click request and consistent marketing-only list history. No delete, trash, or send tool is available.
+- Discovery starts automatically when the user allows AI processing, and caches successful results by account/provider/model. It can create specific questions from the inbox sample in addition to the standard preference suggestions. No discovery happens before consent.
+- The model has an actual OpenAI-compatible `ask_preference` function tool. The server validates the request, binds its scope to the current sender/list, supplies permitted MCQ choices, saves an encrypted question, and holds the email. It never waits for the user or guesses after a timeout. A 30-second deferral deadline is recorded; unanswered questions remain in the tray until answered or snoozed. Repeated messages in a pending scope are also held.
+- Answers create explicit, versioned, encrypted preference memories with a timestamp and audit trail. They apply to future arrivals only. Previously held mail and older mail in that scope remain unchanged, including after an answer, edit, or preference deletion. Preferences can be changed or forgotten in the app. See [PREFERENCE_LEARNING.md](PREFERENCE_LEARNING.md).
 - Each run collects up to 500 unread inbox message IDs before changes, across internal Gmail pages. It skips persisted assessments for the same preference/model version, allowing subsequent runs to reach further into a backlog without reclassifying kept mail. Enumeration is bounded at 1,000 pages per run. This is not a completed 100,000-message load test.
 - Email text is capped at 12,000 characters per decision. Plain-text MIME parts are used; HTML-only mail falls back to Gmail's snippet. Attachments and external resources are not fetched. Incomplete context should produce a keep decision.
 - Known people are approximated using sent-mail history, not Google Contacts. This evidence is cached by sender during a run.
-- AI returns one permitted action and a reason. Invalid responses, unsupported actions, or confidence below 0.98 become keep. Model-reported confidence is not a calibrated accuracy guarantee; evaluate before broad autonomous use.
+- AI returns one permitted action and a reason, or asks a preference question. Invalid responses and unsupported actions become keep; low confidence produces a deferred question. Model-reported confidence is not a calibrated accuracy guarantee; evaluate before broad autonomous use.
 - Gmail protections, preference consistency, unread state, and message history are rechecked before writes. Decisions are streamed as newline-delimited JSON; the UI animates only while the request is active and shows real processed counts.
 - Changes are recorded before Gmail writes; ambiguous writes are not automatically replayed. Existing undo restores changed labels/read state. Decision history is encrypted and account-scoped; bodies are not retained in that history. Account deletion also clears assessment records.
 - Daily local execution uses the same agent when explicitly enabled and the scheduler is active. The current local server was started with scheduling disabled. The UI exposes that fact.
@@ -31,13 +34,12 @@ To switch to OpenRouter, change only `AI_PROVIDER=openrouter` and configure `OPE
 
 Nebius reference: https://docs.tokenfactory.nebius.com/ai-models-inference/json . Live Nemotron JSON-mode support and account access must be verified once the key is present.
 
-Run `npm.cmd run db:migrate` before starting this version against Postgres. Migration 002 adds an assessment ledger; the existing encrypted plans/changes/runs tables hold decision history and undo records.
+Run `npm.cmd run db:migrate` before starting this version against Postgres. Migration 002 adds an assessment ledger; migration 003 adds questions, memories, audit events, held messages, subscription request state, and cached discovery. The existing encrypted plans/changes/runs tables hold decision history and undo records.
 
 ## Remaining work
 
 - Cloud Tasks workers and Cloud Scheduler dispatch, bounded runtime/cost budgets, incremental Gmail history checkpoints, recovery and account cancellation across restarts. The current agent request is local server execution, not a durable Cloud Run job.
-- Subscription intent and newly detected subscription history. Keep approval for unsubscribe until sender-specific exceptions, explicit authorization, supported one-click mechanisms, and uncertainty handling are implemented. Unsubscribe cannot be reversed by undo.
-- Connect-time discovery should begin after the user permits third-party AI processing. Currently OAuth returns to Preferences, where the user explicitly starts discovery.
+- Live validation of automatic unsubscribe and subscription intent classification. The implementation requires opt-in, at least two same-list messages classified as pure unwanted marketing, no transactional evidence or wanted publication, and supported authenticated one-click headers. Ambiguous requests are never replayed. Explicit learned list preferences still cannot bypass transactional protections. Unsubscribe cannot be reversed by undo.
 - Model evaluation on a labeled dataset: important-mail false-clear rate first, then decision coverage, latency, and cost. Compare OpenRouter's configured model with Jev using the same preferences/content and permission gate. Include interviews, relevant LinkedIn mail, known correspondents, wanted newsletters, unwanted subscriptions, cold pitches, HTML-only/truncated emails, and malicious instructions inside emails. Jev has not been integrated or benchmarked.
 - Public privacy/data-retention policy, restricted-scope OAuth verification, production backend deployment, and multi-user load testing. The existing public Cloud Run URL still serves the previous preview.
 
@@ -45,4 +47,4 @@ Official Jev sources reviewed: https://typesafe.ai/ and https://docs.typesafe.ai
 
 ## Verification
 
-`npm.cmd run build`, `npm.cmd test`, `node scripts/qa-agent.mjs`, and `node --env-file=data/neon-test.env scripts/verify-neon.mjs` cover compilation, agent permissions and uncertainty, desktop/mobile preference/stream flows, and persistence/undo on a real isolated Neon branch. Gmail and AI are fixtures in these checks. No live mailbox cleanup or real model accuracy has been validated by them.
+`npm.cmd run build`, `npm.cmd test`, `node scripts/qa-agent.mjs`, and `node --env-file=data/neon-test.env scripts/verify-neon.mjs` cover compilation, agent permissions and uncertainty, tool calls, future-only preference learning, unsubscribe safeguards, desktop/mobile MCQ/edit flows, and question/memory persistence and undo on a real isolated Neon branch. Gmail, model responses and unsubscribe networking are fixtures in these checks. No live mailbox cleanup, live unsubscribe, or real model accuracy has been validated by them.

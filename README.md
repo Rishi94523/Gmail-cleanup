@@ -4,7 +4,7 @@
 
 The backend now uses shared PostgreSQL on Neon when `DATABASE_URL` is configured, with SQLite retained for offline development/tests. It implements OAuth, cleanup review, reversible label changes, and local scheduling. Its 21 automated tests use a test-only provider adapter for Gmail actions. Real-Neon integration checks additionally verify HTTP flows, persistence across app instances/restarts, transaction rollback, and account locks. See [NEON_SETUP.md](NEON_SETUP.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for the validated scope and remaining cloud work.
 
-A calm Gmail cleanup application with a real server-side integration, review-before-cleanup, reversible Gmail label changes, subscription discovery, and a daily maintenance agent. No demo mailbox or fabricated provider results are included.
+A Gmail agent with editable preferences, persistent questions for uncertain mail, reversible label/read changes, and separately permitted intelligent unsubscribe. It learns from explicit answers and leaves held emails unchanged. See [PREFERENCE_LEARNING.md](PREFERENCE_LEARNING.md) for storage and behavior. No fabricated mailbox results are shown in the app.
 
 ## Run locally
 
@@ -69,7 +69,7 @@ References: [Gmail scopes](https://developers.google.com/workspace/gmail/api/aut
 
 For one-click requests the server requires HTTPS, `List-Unsubscribe-Post: List-Unsubscribe=One-Click`, Google's DKIM-pass authentication result, and a matching DKIM signature listing both unsubscribe headers. This relies on Gmail's received metadata and is conservative; unsupported or ambiguous headers are sent to manual Gmail review. The app does not implement its own DKIM verifier.
 
-Every request requires a separate user approval identifying the sender and destination host. The server re-fetches and checks the destination before POST, resolves and pins public IPv4 addresses, rejects private/internal/IP-literal destinations, sends no Google credentials, and refuses redirects. No email-based unsubscribe messages are sent. A successful HTTP response is recorded as **request submitted**, not proof that delivery stopped. Uncertain requests are not retried automatically. Unsubscribe cannot be undone by restoring messages. Protocol reference: [RFC 8058](https://www.rfc-editor.org/rfc/rfc8058.html).
+Manual requests require sender-specific approval. Automatic requests require a separate saved opt-in plus consistent unwanted marketing history on an authenticated list; OTPs, transactional/mixed-purpose lists, known people, and wanted publications are excluded. Unclear intent creates a question and leaves mail unchanged. The server re-fetches context before POST, resolves and pins public IPv4 addresses, rejects private/internal/IP-literal destinations, sends no Google credentials, and refuses redirects. No email-based unsubscribe messages are sent. A successful HTTP response is recorded as **request submitted**, not proof that delivery stopped. Uncertain requests are not retried automatically. Unsubscribe cannot be undone by restoring messages. Protocol reference: [RFC 8058](https://www.rfc-editor.org/rfc/rfc8058.html).
 
 ## AI review
 
