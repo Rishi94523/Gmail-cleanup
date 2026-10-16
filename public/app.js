@@ -1,0 +1,181 @@
+const $ = selector => document.querySelector(selector);
+const $$ = selector => [...document.querySelectorAll(selector)];
+const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const number = value => Number(value || 0).toLocaleString();
+const date = value => new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+let state = null;
+let plan = null;
+let selected = new Set();
+let busy = false;
+let page = 'overview';
+let toastTimer;
+let approval = null;
+
+function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 5500); }
+function error(message) { $('#error-banner').textContent = message; $('#error-banner').hidden = false; $('#error-banner').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+function showPage(name) {
+  page = ['overview', 'subscriptions', 'rules', 'activity'].includes(name) ? name : 'overview';
+  $$('.page').forEach(el => { el.hidden = el.id !== `page-${page}`; });
+  $$('.nav-item').forEach(el => { el.classList.toggle('active', el.dataset.page === page); if (el.dataset.page === page) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); });
+  $('#page-name').textContent = { overview: 'Overview', subscriptions: 'Subscriptions', rules: 'Cleanup rules', activity: 'Activity' }[page];
+  history.replaceState(null, '', `/#${page}`);
+}
+async function request(path, data) {
+  const response = await fetch(path, data === undefined ? { credentials: 'same-origin' } : { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state?.csrf || '' }, body: JSON.stringify(data) });
+  const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Something went wrong.'); return result;
+}
+function setBusy(value, button, label) {
+  busy = value;
+  for (const selector of ['#scan-button', '#discover-button', '#save-rules', '#review-cleanup', '#routine-button', '#disconnect-button', '#confirm-disconnect']) { const el = $(selector); if (el) el.disabled = value || !state?.connected; }
+  $$('#preview-body input').forEach(el => { el.disabled = value || el.dataset.eligible !== 'true'; });
+  if (button) { if (value) { button.dataset.originalText = button.textContent; button.textContent = label; button.disabled = true; } else { button.textContent = button.dataset.originalText; button.disabled = !state?.connected; } }
+  document.body.setAttribute('aria-busy', String(value));
+}
+async function operation(button, label, fn) {
+  if (busy) return;
+  $('#error-banner').hidden = true; setBusy(true, button, label);
+  try { await fn(); } catch (err) { error(err.message); try { await refresh(false); } catch {} }
+  finally { setBusy(false, button); }
+}
+function connect() {
+  if (!state?.configured) { toast('Gmail setup is needed: add your Google OAuth client in the server’s .env file. See README.md.'); $('#setup-banner').scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
+  window.location.assign('/auth/google');
+}
+function empty(title, text) { return `<div class="empty-state"><strong>${escape(title)}</strong><p>${escape(text)}</p></div>`; }
+function renderRules() {
+  const rules = state.rules;
+  $('#rule-days').value = rules.days;
+  $$('input[name=category]').forEach(el => { el.checked = rules.categories.includes(el.value); });
+  $('#rule-archive').checked = rules.archive; $('#rule-read').checked = rules.markRead;
+  $('#rule-protected').value = rules.protectedSenders.join('\n'); $('#rule-daily').checked = rules.daily;
+  $('#rule-hour').value = rules.hour;
+  if (!$$('#rule-zone option').some(option => option.value === rules.timezone)) $('#rule-zone').add(new Option(rules.timezone, rules.timezone));
+  $('#rule-zone').value = rules.timezone; $('#rule-ai').checked = rules.aiEnabled;
+  $('#rule-ai').disabled = !state.aiConfigured;
+  $('#ai-status').textContent = state.aiConfigured ? 'AI provider is configured. Enable only if you agree to the data sharing described above.' : 'AI is not configured yet. Cleanup rules work without it; add AI_API_KEY to enable AI review.';
+  $('#connection-settings-copy').textContent = state.connected ? `Connected as ${state.email}` : 'Connect Gmail to save your preferences.';
+  $('#disconnect-button').hidden = !state.connected;
+}
+function renderActivity() {
+  const renderRun = run => {
+    const titles = { cleanup: 'Inbox cleanup', daily: 'Daily tidy', unsubscribe: 'Unsubscribe request' };
+    const summaries = { running: 'In progress. Refresh to check completion.', completed: `${number(run.changed)} emails tidied · ${number(run.skipped)} kept after rechecking`, needs_review: 'Partially completed or interrupted. Review before continuing.', undone: 'Cleanup restored', requested: 'Request accepted by the sender' };
+    return `<div class="list-row"><span class="row-icon" aria-hidden="true">${run.kind === 'unsubscribe' ? '↗' : run.status === 'undone' ? '↶' : '✓'}</span><div class="row-main"><strong>${escape(titles[run.kind] || run.kind)}</strong><p>${escape(summaries[run.status] || run.status)}</p>${run.detail ? `<small>${escape(run.detail)}</small>` : ''}</div><div class="row-side"><time datetime="${new Date(run.created).toISOString()}">${date(run.created)}</time>${run.undoable ? `<button class="text-button" data-undo="${escape(run.id)}">Undo cleanup ↶</button>` : `<span class="soft-tag">${escape(run.status.replaceAll('_', ' '))}</span>`}</div></div>`;
+  };
+  $('#recent-activity').innerHTML = state.runs.length ? state.runs.slice(0, 3).map(renderRun).join('') : empty('Your fresh start is waiting.', 'Once you run a cleanup, you’ll see what changed here. Every action has a paper trail.');
+  $('#activity-list').innerHTML = state.runs.length ? state.runs.map(renderRun).join('') : empty('Nothing moved. Nothing missed.', 'Your cleanups, daily routines, and unsubscribe requests will appear here.');
+  $('#daily-error').hidden = !state.lastError; $('#daily-error').textContent = state.lastError ? `Daily agent needs attention: ${state.lastError}` : '';
+}
+function renderSubscriptions() {
+  $('#subscription-count').textContent = state.subscriptions.filter(s => ['review', 'manual'].includes(s.status)).length;
+  const statuses = { review: 'One-click available · approval required', manual: 'Manual review in Gmail', requested: 'Request submitted · allow time for the sender', uncertain: 'Completion unknown · check before retrying' };
+  $('#subscriptions-list').innerHTML = state.subscriptions.length ? state.subscriptions.map(sub => `<div class="list-row"><span class="row-icon" aria-hidden="true">${escape(sub.sender[0]?.toUpperCase() || '@')}</span><div class="row-main"><strong>${escape(sub.sender)}</strong><p>${escape(statuses[sub.status] || sub.status)}</p>${sub.host ? `<small>Request destination: ${escape(sub.host)}</small>` : ''}</div><div class="row-side">${sub.status === 'review' ? `<button class="secondary" data-unsubscribe="${escape(sub.sender)}">Review unsubscribe ↗</button>` : `<a class="text-button" href="https://mail.google.com/mail/u/0/#search/${encodeURIComponent(`from:(${sub.sender})`)}" target="_blank" rel="noopener noreferrer">Review in Gmail ↗</a>`}</div></div>`).join('') : empty('Make space for the good mail.', 'Find subscriptions to inspect the latest 100 inbox messages. Repeat later to discover more senders.');
+}
+function renderPreview() {
+  $('#preview-section').hidden = !plan;
+  $('#cleanup-approval').hidden = true; approval = null;
+  if (!plan) return;
+  const candidates = plan.decisions.filter(d => !d.reason);
+  $('#preview-count').textContent = `${number(candidates.length)} ready to tidy`;
+  let nextButton = $('#next-batch');
+  if (!nextButton) { nextButton = document.createElement('button'); nextButton.id = 'next-batch'; nextButton.className = 'secondary'; nextButton.textContent = 'Review next batch →'; nextButton.type = 'button'; $('.preview-footer').prepend(nextButton); }
+  nextButton.hidden = !plan.moreAvailable; nextButton.disabled = busy;
+  $('#preview-description').textContent = `${number(plan.decisions.length)} messages inspected in this batch. ${plan.moreAvailable ? 'More matching mail remains; scan again after cleanup for the next batch.' : 'All messages returned for this batch are shown.'} Potentially important mail is kept. Preview expires after one hour.`;
+  $('#preview-body').innerHTML = plan.decisions.length ? plan.decisions.map(item => `<tr class="${item.reason ? 'kept' : ''}"><td><input type="checkbox" data-message="${escape(item.id)}" data-eligible="${!item.reason}" aria-label="Select ${escape(item.subject)}" ${item.reason ? 'disabled' : selected.has(item.id) ? 'checked' : ''}></td><td><span class="subject">${escape(item.subject)}</span><span class="sender">${escape(item.sender)}</span></td><td>${date(item.date)}</td><td><span class="decision">${escape(item.reason || item.aiReason || 'Matches your cleanup rules')}</span><small class="sender">${escape(item.source)}</small></td></tr>`).join('') : '<tr><td colspan="4">No matching emails in this batch. Try a different age or category in your rules.</td></tr>';
+  updateSelection();
+}
+function updateSelection() {
+  const eligible = plan?.decisions.filter(d => !d.reason).length || 0;
+  $('#selection-summary').textContent = `${number(selected.size)} of ${number(eligible)} eligible emails selected`;
+  $('#select-all').checked = eligible > 0 && selected.size === eligible; $('#select-all').indeterminate = selected.size > 0 && selected.size < eligible; $('#select-all').disabled = !eligible || busy;
+  $('#review-cleanup').disabled = !selected.size || busy;
+  $('#cleanup-approval').hidden = true; approval = null;
+}
+function render() {
+  const connected = state.connected; const rules = state.rules;
+  $('#account-label').textContent = connected ? state.email : 'Your Gmail'; $('#account-state').textContent = connected ? 'Connected securely' : 'Not connected'; $('#avatar').textContent = connected ? state.email[0].toUpperCase() : 'G';
+  $('#connection-dot').classList.toggle('on', connected); $('#account-button').textContent = connected ? 'Account & rules ↗' : 'Connect Gmail ↗';
+  $('#agent-pill').classList.toggle('on', connected && rules.daily); $('#agent-pill').innerHTML = `<i></i> ${connected && rules.daily ? 'Daily agent on' : 'Agent paused'}`;
+  $('#metric-cleaned').textContent = connected ? number(state.totals?.cleaned) : '—';
+  $('#metric-unsubscribed').textContent = connected ? number(state.totals?.requested) : '—';
+  $('#metric-routine').textContent = rules.daily && connected ? 'Every day' : 'Not set';
+  const hour = `${String(rules.hour).padStart(2, '0')}:00`;
+  $('#routine-caption').textContent = connected && rules.daily ? `${hour} · ${rules.timezone}` : 'A quieter inbox on autopilot';
+  $('#routine-time').textContent = hour; $('#routine-zone').textContent = rules.timezone; $('#routine-state').textContent = connected && rules.daily ? 'Enabled' : 'Paused';
+  $('#routine-button').textContent = connected && rules.daily ? 'Manage my daily routine ↗' : 'Set up my daily routine ↗';
+  $('#rules-summary').textContent = `${rules.categories.map(c => c[0].toUpperCase() + c.slice(1)).join(' & ')} · older than ${rules.days} days`;
+  $('#actions-summary').textContent = `${rules.archive ? 'Archive to “Cleaned by agent”' : 'Keep in inbox with “Cleaned by agent” label'} · ${rules.markRead ? 'mark as read' : 'keep unread status'}`;
+  $('#setup-banner').hidden = connected;
+  $('#setup-banner').innerHTML = state.configured ? '<div><strong>A calmer inbox starts here.</strong><p>Connect your Gmail, choose your boundaries, and preview your first cleanup. Nothing moves until you approve.</p></div><button class="primary" id="connect-panel">Connect Gmail ↗</button>' : `<div><strong>Your workspace is ready. Gmail needs one more step.</strong><p>Set your Google OAuth client in the server’s <code>.env</code> file, then restart. Missing: ${escape(state.setupMissing.join(', '))}. Setup instructions are in README.md.</p></div><button class="secondary" id="setup-rules">Explore the rules ↗</button>`;
+  renderRules(); renderActivity(); renderSubscriptions(); renderPreview();
+  for (const selector of ['#scan-button', '#discover-button', '#save-rules', '#routine-button']) $(selector).disabled = busy || !connected;
+  if (!connected) { $('#metric-unread').textContent = '—'; $('#unread-caption').textContent = 'Connect to see your inbox'; }
+}
+async function refresh(mailbox = false) {
+  state = await request('/api/status');
+  const samePlan = plan?.id === state.plan?.id;
+  plan = state.plan;
+  if (!samePlan) selected = new Set(plan?.decisions.filter(d => !d.reason).map(d => d.id) || []);
+  render();
+  if (mailbox && state.connected) {
+    try { const profile = await request('/api/mailbox'); $('#metric-unread').textContent = number(profile.unread); $('#unread-caption').textContent = `Across ${number(profile.messages)} emails in Gmail`; }
+    catch (err) { $('#unread-caption').textContent = 'Mailbox count unavailable'; error(err.message); }
+  }
+}
+function rulesInput() {
+  return { days: Number($('#rule-days').value), categories: $$('input[name=category]:checked').map(input => input.value), archive: $('#rule-archive').checked, markRead: $('#rule-read').checked, protectedSenders: $('#rule-protected').value.split(/[\n,]+/).map(s => s.trim()).filter(Boolean), daily: $('#rule-daily').checked, hour: Number($('#rule-hour').value), timezone: $('#rule-zone').value, aiEnabled: $('#rule-ai').checked };
+}
+for (let i = 0; i < 24; i++) $('#rule-hour').add(new Option(`${String(i).padStart(2, '0')}:00`, i));
+$$('[data-page]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.page)));
+$$('[data-goto]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.goto)));
+$('#account-button').addEventListener('click', () => state?.connected ? showPage('rules') : connect());
+$('#routine-button').addEventListener('click', () => { showPage('rules'); $('#rule-daily').focus(); });
+$('#rules-form').addEventListener('submit', event => { event.preventDefault(); operation($('#save-rules'), 'Saving…', async () => { await request('/api/rules', rulesInput()); await refresh(); toast('Your rules are saved. Scan again for a fresh preview.'); }); });
+$('#scan-button').addEventListener('click', () => operation($('#scan-button'), 'Reviewing up to 100 emails…', async () => { const result = await request('/api/scan', {}); await refresh(); plan = result.plan; selected = new Set(plan.decisions.filter(d => !d.reason).map(d => d.id)); renderPreview(); $('#preview-section').scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
+$('#discover-button').addEventListener('click', () => operation($('#discover-button'), 'Finding mailing lists…', async () => { const result = await request('/api/discover', {}); await refresh(); toast(`Inspected ${number(result.inspected)} recent messages for subscriptions.`); }));
+$('#select-all').addEventListener('change', event => { selected = event.target.checked ? new Set(plan.decisions.filter(d => !d.reason).map(d => d.id)) : new Set(); $$('#preview-body input[data-eligible=true]').forEach(input => { input.checked = selected.has(input.dataset.message); }); updateSelection(); });
+$('#preview-body').addEventListener('change', event => { const id = event.target.dataset.message; if (!id) return; if (event.target.checked) selected.add(id); else selected.delete(id); updateSelection(); });
+$('#review-cleanup').addEventListener('click', () => {
+  if (!plan || !selected.size || busy) return;
+  approval = { planId: plan.id, ids: [...selected] };
+  $('#cleanup-approval').innerHTML = `<h3>Ready to tidy ${number(selected.size)} emails?</h3><p>${plan.rules.archive ? 'These messages will leave your inbox and receive the “Cleaned by agent” label.' : 'These messages stay in the inbox and receive the “Cleaned by agent” label.'} ${plan.rules.markRead ? 'Matching unread messages will also be marked as read.' : 'Their unread status will stay the same.'} Protections are checked again before each change. You can undo this cleanup from Activity.</p><div class="approval-actions"><button class="primary" id="confirm-cleanup">Approve cleanup →</button><button class="text-button" id="cancel-cleanup">Keep reviewing</button></div>`;
+  $('#cleanup-approval').hidden = false; $('#confirm-cleanup').focus();
+});
+$('#cleanup-approval').addEventListener('click', event => {
+  if (event.target.id === 'cancel-cleanup') { $('#cleanup-approval').hidden = true; approval = null; }
+  if (event.target.id === 'confirm-cleanup' && approval) {
+    const approved = { ...approval };
+    operation(event.target, 'Tidying your inbox…', async () => { const result = await request('/api/apply', approved); await refresh(true); toast(`${number(result.changed)} emails tidied. Undo is available in Activity.`); });
+  }
+});
+document.addEventListener('click', event => {
+  const button = event.target.closest('button'); if (!button) return;
+  if (button.id === 'connect-panel') connect();
+  if (button.id === 'setup-rules') showPage('rules');
+  if (button.id === 'next-batch' && plan) operation(button, 'Reviewing next batch…', async () => { await request('/api/scan', { nextPlanId: plan.id }); await refresh(); toast('Next batch loaded. The previous batch was left unchanged.'); });
+  if (button.dataset.unsubscribe) {
+    const sub = state.subscriptions.find(s => s.sender === button.dataset.unsubscribe); if (!sub || busy) return;
+    $('#unsubscribe-approval').innerHTML = `<h3>Leave this mailing list?</h3><p>Send a one-click unsubscribe request for <strong>${escape(sub.sender)}</strong> to <strong>${escape(sub.host)}</strong>. This contacts the sender and cannot be undone by restoring email. Delivery may take time to stop.</p><div class="approval-actions"><button class="primary" data-confirm-unsubscribe="${escape(sub.sender)}">Send unsubscribe request ↗</button><button class="text-button" id="cancel-unsubscribe">Keep subscription</button></div>`;
+    $('#unsubscribe-approval').hidden = false; $('#unsubscribe-approval').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  if (button.id === 'cancel-unsubscribe') $('#unsubscribe-approval').hidden = true;
+  if (button.dataset.confirmUnsubscribe) operation(button, 'Submitting request…', async () => { await request('/api/unsubscribe', { sender: button.dataset.confirmUnsubscribe }); $('#unsubscribe-approval').hidden = true; await refresh(); toast('The sender accepted your unsubscribe request. Allow time for mail to stop.'); });
+  if (button.dataset.undo) {
+    if (busy) return;
+    showPage('activity');
+    $('#undo-approval').innerHTML = `<h3>Restore this cleanup?</h3><p>Restore the labels and unread status changed by this run. This also affects those same labels if you changed them manually afterward. Other labels stay as they are.</p><div class="approval-actions"><button class="primary" data-confirm-undo="${escape(button.dataset.undo)}">Restore emails ↶</button><button class="text-button" id="cancel-undo">Cancel</button></div>`;
+    $('#undo-approval').hidden = false; $('#undo-approval').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  if (button.id === 'cancel-undo') $('#undo-approval').hidden = true;
+  if (button.dataset.confirmUndo) operation(button, 'Restoring…', async () => { const result = await request('/api/undo', { runId: button.dataset.confirmUndo }); $('#undo-approval').hidden = true; await refresh(true); toast(`${number(result.restored)} emails restored.`); });
+});
+$('#disconnect-button').addEventListener('click', () => { $('#disconnect-approval').hidden = false; });
+$('#cancel-disconnect').addEventListener('click', () => { $('#disconnect-approval').hidden = true; });
+$('#confirm-disconnect').addEventListener('click', event => operation(event.target, 'Disconnecting…', async () => { await request('/api/disconnect', {}); $('#disconnect-approval').hidden = true; await refresh(); showPage('overview'); toast('Gmail disconnected. Local account data removed.'); }));
+const auth = new URLSearchParams(location.search).get('auth');
+if (auth) {
+  const messages = { connected: 'Gmail connected. Choose your rules, then preview your first cleanup.', setup: 'Add your Google OAuth client to the server configuration before connecting.', cancelled: 'Connection cancelled. Your Gmail was not changed.', state: 'The connection link expired. Start again from Connect Gmail.', failed: 'Gmail connection could not complete. Check your OAuth client, redirect URI, test-user access, and requested permissions, then try again.' };
+  $('#notice-banner').textContent = messages[auth] || 'Review your connection settings.'; $('#notice-banner').hidden = false;
+}
+showPage(location.hash.slice(1));
+refresh(true).catch(err => error(`The app could not load: ${err.message}`));
