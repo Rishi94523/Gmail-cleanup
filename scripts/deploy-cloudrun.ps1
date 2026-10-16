@@ -46,7 +46,7 @@ $image = "${Region}-docker.pkg.dev/${ProjectId}/gmail-cleanup/web:${imageTag}"
 Invoke-Gcloud run deploy gmail-cleanup-web --image=$image --project=$ProjectId --region=$Region --service-account=$runtimeAccount --allow-unauthenticated --port=8080 --cpu=1 --memory=512Mi --min-instances=0 --max-instances=2 --concurrency=80 --timeout=60s --cpu-throttling
 $siteUrl = & gcloud.cmd run services describe gmail-cleanup-web --project=$ProjectId --region=$Region --format='value(status.url)'
 if ($LASTEXITCODE -ne 0 -or -not $siteUrl) { throw 'Deployment returned no service URL. Inspect Cloud Run status before retrying.' }
-$health = Invoke-RestMethod -Uri "$siteUrl/healthz" -TimeoutSec 60
+$health = Invoke-RestMethod -Uri "$siteUrl/api/health" -TimeoutSec 60
 if ($health.stage -ne 'public-product-preview' -or $health.gmailEnabled -ne $false) { throw 'Unexpected deployment health response.' }
 Write-Output "Verified public product preview: $siteUrl"
 Write-Output 'This release does not enable live Gmail or daily processing. Cloud Run, build, and image storage usage may incur charges.'

@@ -1,6 +1,6 @@
 # Gmail-cleanup (Inboxclean)
 
-**Status: in development.** This repository contains a local Gmail backend prototype and an interactive React/TypeScript product preview. Google Cloud Run is the selected deployment target; production cloud scheduling and deployment are not implemented yet. No live Gmail validation or thousand-user load test has been completed.
+**Status: in development.** [Open the public product preview](https://gmail-cleanup-web-450826266929.us-central1.run.app), deployed on Google Cloud Run. This repository also contains a local Gmail backend prototype. Production mailbox processing and cloud scheduling are not implemented yet. No live Gmail validation or thousand-user load test has been completed.
 
 The local backend implements OAuth, cleanup review, reversible label changes, and scheduling. Its 20 automated backend/preview tests use a test-only provider adapter for Gmail actions. Cloudflare deployment files are retained from an earlier hosting exploration; no Cloudflare deployment has been made. See [ARCHITECTURE.md](ARCHITECTURE.md) for the boundary between current implementation and the planned production system.
 
@@ -78,7 +78,7 @@ The browser can be closed; **the Node process and persistent storage must remain
 
 Sessions use random, hashed tokens and HttpOnly/SameSite cookies (Secure under HTTPS). OAuth state and PKCE bind callbacks to the initiating session. Mutating API routes require both same-origin requests and CSRF tokens. API data is scoped to the session's connected Gmail account. Disconnect pauses jobs, revokes Google access, and deletes that account's local data and undo history; emails themselves remain as previously modified.
 
-A multi-stage Dockerfile builds the React site and serves the **public product preview** on port 8080. It intentionally does not deploy the local SQLite scheduler to Cloud Run. See [deployment instructions](deploy/README.md) for CLI login, project setup, and the rollout plan. No application has been deployed yet.
+A multi-stage Dockerfile builds the React site and serves the **public product preview** on port 8080. It intentionally does not deploy the local SQLite scheduler to Cloud Run. See [deployment instructions](deploy/README.md) for CLI login, project setup, and the rollout plan. The deployed site is a public preview; live Gmail processing is not enabled.
 
 ```powershell
 docker build -t inboxclean .

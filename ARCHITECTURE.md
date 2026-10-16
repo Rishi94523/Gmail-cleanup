@@ -26,12 +26,12 @@ Deploy using GitHub Actions with short-lived cloud identity, health checks, and 
 ## Not implemented or verified yet
 
 - Production NestJS/PostgreSQL migration, Cloud Tasks, Cloud Scheduler, Secret Manager, and GitHub Actions deployment.
-- Google Cloud Run deployment or a public application URL.
+- Google Cloud Run deployment of the real Gmail backend and task services. The public product preview is deployed separately.
 - Live OAuth/token refresh, real Gmail changes, real unsubscribe delivery, or real model-provider responses.
 - Public Google OAuth verification and any required security assessment.
 - Thousand-user load testing or measured infrastructure/AI cost.
 
-The public GitHub repository is a source-code project link; it is not evidence of a deployed or fully operational SaaS product.
+The public GitHub repository is a source-code project link. The [Cloud Run URL](https://gmail-cleanup-web-450826266929.us-central1.run.app) serves the product preview; neither is evidence of fully operational Gmail automation.
 
 ## Deployment preparation
 
