@@ -1,0 +1,54 @@
+import { chromium } from 'playwright';
+import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { createApp } from '../server/index.js';
+import { DEFAULT_RULES } from '../server/rules.js';
+
+const output = resolve(process.argv[2] || 'data/qa-agent'); await mkdir(output, { recursive: true });
+const app = await createApp({ dataDir: 'data/qa-agent/db', config: { databaseUrl: '', encryptionKey: '', scheduler: false, appUrl: 'http://localhost:3070', port: 3070 } });
+await new Promise(resolve => app.server.listen(3070, '127.0.0.1', resolve));
+const browser = await chromium.launch({ executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true });
+try {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } }); const errors = []; page.on('pageerror', e => errors.push(e.message));
+  const state = { connected: true, configured: true, aiConfigured: true, schedulerActive: false, csrf: 'fixture-only', email: 'test@example.invalid', rules: { ...DEFAULT_RULES }, runs: [], subscriptions: [], plan: null, totals: {} }; let learned = false; let ran = false;
+  await page.route('**/api/**', async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/agent/run') {
+      ran = true; assert.deepEqual(route.request().postDataJSON(), { authorize: true });
+      return route.fulfill({ contentType: 'application/x-ndjson', body: [{ type: 'stage', message: 'Reading and deciding', total: 2 }, { type: 'decision', action: 'read', subject: '<script>bad()</script> sale', reason: 'Not relevant to your interests', inspected: 1, total: 2, changed: 1, kept: 0 }, { type: 'decision', action: 'keep', subject: 'Interview next week', reason: 'Job opportunity', inspected: 2, total: 2, changed: 1, kept: 1 }, { type: 'complete', inspected: 2, changed: 1, kept: 1 }].map(e => JSON.stringify(e)).join('\n') + '\n' });
+    }
+    let json;
+    if (path === '/api/status') json = state;
+    else if (path === '/api/mailbox') json = { unread: 7590, messages: 7626 };
+    else if (path === '/api/agent/learn') { assert.equal(route.request().postDataJSON().consent, true); learned = true; json = { inspected: 40, summary: 'Your inbox includes job opportunities.', suggestions: [{ topic: 'jobs', note: 'Would you like to keep recruiting emails?' }] }; }
+    else if (path === '/api/rules') { state.rules = route.request().postDataJSON(); json = { rules: state.rules }; }
+    else if (path === '/api/agent/history') json = { logs: [{ decisions: [{ subject: 'Sale', action: 'read', reason: 'Low priority' }] }] };
+    else throw new Error(`Unexpected request ${path}`);
+    await route.fulfill({ json });
+  });
+  await page.goto('http://localhost:3070'); await page.waitForSelector('#agent-configure');
+  assert.equal(await page.locator('#agent-start').isDisabled(), true);
+  await page.getByRole('button', { name: 'Preferences', exact: true }).click();
+  assert.equal(await page.locator('#agent-learn').isDisabled(), true);
+  await page.locator('#agent-consent').check(); await page.locator('#agent-learn').click(); await page.waitForFunction(() => document.querySelector('#agent-suggestions').textContent.includes('40 messages'));
+  assert.equal(learned, true); assert.equal(ran, false);
+  await page.locator('#pref-interests').fill('Software engineering roles');
+  await page.locator('#save-preferences').click(); await page.waitForSelector('#page-overview:not([hidden])');
+  assert.equal(state.rules.agent.action, 'read'); assert.equal(state.rules.agent.enabled, true); assert.equal(state.rules.daily, false);
+  await page.locator('#agent-start').click(); await page.waitForFunction(() => document.querySelector('#agent-stage').textContent === 'Run finished.');
+  assert.equal(ran, true); assert.equal(await page.locator('#agent-decisions script').count(), 0);
+  assert.ok((await page.locator('#agent-counts').textContent()).includes('1 changed'));
+  await page.evaluate(() => { document.querySelector('#toast').hidden = true; });
+  await page.screenshot({ path: resolve(output, 'agent-desktop.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Preferences', exact: true }).click();
+  await page.screenshot({ path: resolve(output, 'preferences-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Mobile preferences overflow');
+  await page.screenshot({ path: resolve(output, 'preferences-mobile.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Overview', exact: true }).click();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Mobile dashboard overflow');
+  await page.screenshot({ path: resolve(output, 'agent-mobile.png'), fullPage: true });
+  assert.deepEqual(errors, []);
+  console.log('PASS desktop/mobile agent flow, consent, AI preference discovery, saved permissions, streamed decisions, escaped content, and readable responsive layout. Gmail and AI were test fixtures; no live email actions.');
+} finally { await browser.close(); await app.close(); }

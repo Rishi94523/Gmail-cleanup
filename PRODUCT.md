@@ -1,20 +1,20 @@
 # Inboxclean
 
-A personal Gmail assistant that clears a backlog, reduces unwanted subscriptions, and maintains the inbox using rules the user controls.
+A Gmail agent that learns what matters to a person and maintains their unread inbox using AI decisions and explicit permissions. See [AGENT_WORKFLOW.md](AGENT_WORKFLOW.md) for implemented behavior and remaining boundaries.
 
 ## First-use flow
 
 1. Connect Gmail through Google OAuth.
-2. Scan in bounded batches, show progress, and group messages by sender and category.
-3. Suggest cleanup rules with sample messages and reasons.
-4. Let the user choose age thresholds, categories, protected senders, and actions.
-5. Preview message counts and approve a concrete cleanup plan.
-6. Save a daily schedule and choose which actions may run automatically.
+2. Ask permission for AI processing, then learn from a sample of the inbox.
+3. Suggest preferences for jobs, outreach, known people, and subscriptions.
+4. Confirm interests, exceptions, and permitted actions once.
+5. Start the agent; show actual decisions and progress instead of requiring message-by-message review.
+6. Show a summary and undo, with daily execution once scheduling is configured.
 
 ## Defaults
 
-- Archive promotions and routine alerts older than 90 days, adding a `Cleaned by agent` label.
-- Mark matching messages as read only when that option is enabled.
+- Mark low-priority unread mail as read by default. Archive only when separately permitted; never delete.
+- AI decisions use user context rather than treating age or a Gmail category as sufficient permission.
 - Protect starred/important mail and user-approved senders. Treat personal messages, financial/legal/security mail, bookings, and receipts conservatively; age alone is insufficient.
 - Queue uncertain classifications for review.
 - Require approval for unsubscribe requests; separately allow sender-specific future automation.

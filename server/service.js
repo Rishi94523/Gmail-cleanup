@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { DEFAULT_RULES, validateRules, gmailQuery, headersOf, senderAddress, protectedReason, changesFor, undoChanges, dailyKey } from './rules.js';
 import { gmailClient, metadata, mapLimit, classify } from './gmail.js';
 import { unsubscribeUrl, postUnsubscribe } from './security.js';
+import { preferences, runAgent } from './agent.js';
 
 export class InboxService {
   constructor(store, crypto, config, clientFactory = gmailClient) { this.store = store; this.crypto = crypto; this.config = config; this.clientFactory = clientFactory; }
@@ -25,7 +26,9 @@ export class InboxService {
     finally { clearInterval(heartbeat); await this.store.run('DELETE FROM locks WHERE account_id=? AND owner=?', id, owner); }
   }
   async saveRules(id, input) {
-    const rules = validateRules(input);
+    const agent = input.agent || (await this.account(id)).rules.agent;
+    const rules = { ...validateRules(input), ...(agent ? { agent: preferences(agent) } : {}) };
+    if (rules.agent?.enabled && !this.config.aiKey) throw new Error('Configure AI_API_KEY before enabling the agent.');
     if (rules.aiEnabled && !this.config.aiKey) throw new Error('Configure AI_API_KEY on the server before enabling AI classification.');
     await this.store.transaction(async tx => {
       await tx.run('UPDATE accounts SET rules=? WHERE id=?', JSON.stringify(rules), id);
@@ -164,6 +167,7 @@ export class InboxService {
           if (!latest || latest.last_day === day || !JSON.parse(latest.rules).daily) return;
           // Claim once per day; interrupted/failed mutations require manual review.
           await this.store.run('UPDATE accounts SET last_day=?,last_error=NULL WHERE id=?', day, row.id);
+          if (JSON.parse(latest.rules).agent?.enabled) { await runAgent(this, row.id, guard, undefined, 'daily'); return; }
           const plan = await this.scanUnlocked(row.id, 'daily');
           const selected = plan.decisions.filter(d => !d.reason).map(d => d.id);
           if (selected.length) await this.applyUnlocked(row.id, plan.id, selected, 'daily', guard);

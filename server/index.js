@@ -8,6 +8,7 @@ import { encryption, randomToken, hash } from './security.js';
 import { DEFAULT_RULES } from './rules.js';
 import { InboxService } from './service.js';
 import { jsonFetch } from './gmail.js';
+import { learnInbox, runAgent } from './agent.js';
 
 export async function createApp(options = {}) {
   const config = { port: Number(process.env.PORT || 3000), host: process.env.HOST || '127.0.0.1', appUrl: process.env.APP_URL || 'http://localhost:3000', clientId: process.env.GOOGLE_CLIENT_ID || '', clientSecret: process.env.GOOGLE_CLIENT_SECRET || '', encryptionKey: process.env.TOKEN_ENCRYPTION_KEY || '', aiKey: process.env.AI_API_KEY || '', aiModel: process.env.AI_MODEL || 'google/gemini-2.5-flash', databaseUrl: process.env.DATABASE_URL || '', scheduler: !process.env.K_SERVICE && process.env.ENABLE_LOCAL_SCHEDULER !== 'false', ...options.config };
@@ -59,7 +60,7 @@ export async function createApp(options = {}) {
           store.all('SELECT sender,host,status FROM subscriptions WHERE account_id=? ORDER BY sender LIMIT 200', account.id),
           service ? service.latestPlan(account.id) : null
         ]) : null;
-        return json(res, 200, { csrf: session.csrf, configured: ready, aiConfigured: Boolean(config.aiKey), connected: Boolean(account), email: account?.email || null, rules: account ? JSON.parse(account.rules) : DEFAULT_RULES, lastDay: account?.last_day || null, lastError: account?.last_error || null, totals: details ? { cleaned: details[0].total, requested: details[1].total } : null, setupMissing: [!config.clientId && 'GOOGLE_CLIENT_ID', !config.clientSecret && 'GOOGLE_CLIENT_SECRET', !crypto && 'TOKEN_ENCRYPTION_KEY'].filter(Boolean), plan: details?.[4] || null, runs: details ? details[2].map(run => ({ ...run, undoable: Boolean(run.undoable) })) : [], subscriptions: details?.[3] || [] });
+        return json(res, 200, { csrf: session.csrf, configured: ready, aiConfigured: Boolean(config.aiKey), schedulerActive: Boolean(config.scheduler), connected: Boolean(account), email: account?.email || null, rules: account ? JSON.parse(account.rules) : DEFAULT_RULES, lastDay: account?.last_day || null, lastError: account?.last_error || null, totals: details ? { cleaned: details[0].total, requested: details[1].total } : null, setupMissing: [!config.clientId && 'GOOGLE_CLIENT_ID', !config.clientSecret && 'GOOGLE_CLIENT_SECRET', !crypto && 'TOKEN_ENCRYPTION_KEY'].filter(Boolean), plan: details?.[4] || null, runs: details ? details[2].map(run => ({ ...run, undoable: Boolean(run.undoable) })) : [], subscriptions: details?.[3] || [] });
       }
       if (url.pathname === '/auth/google' && req.method === 'GET') {
         if (!ready) return redirect(res, '/?auth=setup');
@@ -101,6 +102,21 @@ export async function createApp(options = {}) {
         if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
         if (req.headers.origin !== origin || req.headers['x-csrf-token'] !== session.csrf || !req.headers['content-type']?.startsWith('application/json')) return json(res, 403, { error: 'Request could not be verified. Reload the app and try again.' });
         const input = await body(req);
+        if (url.pathname === '/api/agent/learn') return json(res, 200, await service.locked(id, () => learnInbox(service, id, input.consent)));
+        if (url.pathname === '/api/agent/history') {
+          const logs = await store.all("SELECT payload FROM plans WHERE account_id=? AND status='agent_log' ORDER BY created DESC LIMIT 10", id);
+          return json(res, 200, { logs: logs.map(row => crypto.open(row.payload)) });
+        }
+        if (url.pathname === '/api/agent/run') {
+          if (input.authorize !== true) throw new Error('Authorize the agent to act using your saved preferences.');
+          res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'X-Accel-Buffering': 'no' });
+          const emit = event => { if (!res.destroyed) res.write(`${JSON.stringify(event)}\n`); };
+          const heartbeat = setInterval(() => emit({ type: 'heartbeat' }), 10000);
+          try { await service.locked(id, guard => runAgent(service, id, guard, emit)); }
+          catch { emit({ type: 'error', message: 'Agent stopped. Check Activity for confirmed changes. Verify the AI key, model access, and Gmail connection before trying again.' }); }
+          finally { clearInterval(heartbeat); res.end(); }
+          return;
+        }
         if (url.pathname === '/api/rules') return json(res, 200, { rules: await service.saveRules(id, input) });
         if (url.pathname === '/api/scan') return json(res, 200, { plan: await service.scan(id, 'manual', typeof input.nextPlanId === 'string' ? input.nextPlanId : null) });
         if (url.pathname === '/api/discover') return json(res, 200, await service.discover(id));
@@ -116,7 +132,7 @@ export async function createApp(options = {}) {
           const revoked = await fetch('https://oauth2.googleapis.com/revoke', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: account.tokens.refresh_token }), signal: AbortSignal.timeout(15000) });
           if (!revoked.ok) throw new Error('Agent paused, but Google revocation failed. Try disconnecting again or remove app access from your Google account.');
           await store.transaction(async tx => {
-            for (const table of ['changes', 'plans', 'runs', 'subscriptions']) await tx.run(`DELETE FROM ${table} WHERE account_id=?`, id);
+            for (const table of ['changes', 'plans', 'runs', 'subscriptions', 'agent_assessments']) await tx.run(`DELETE FROM ${table} WHERE account_id=?`, id);
             await tx.run('DELETE FROM sessions WHERE account_id=?', id); await tx.run('DELETE FROM accounts WHERE id=?', id);
           });
           res.setHeader('Set-Cookie', cookie('', 0)); return { success: true };

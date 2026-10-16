@@ -5,6 +5,7 @@ import { createApp } from '../server/index.js';
 import { openPostgresStore } from '../server/postgres-store.js';
 import { encryption, randomToken, hash } from '../server/security.js';
 import { DEFAULT_RULES } from '../server/rules.js';
+import { DEFAULT_PREFERENCES, runAgent } from '../server/agent.js';
 
 // This destructive-fixture test is intentionally restricted to our expiring
 // development branch. It never seeds mock accounts in production.
@@ -71,10 +72,19 @@ try {
   assert.equal((await store.get("SELECT count(*) AS total FROM runs WHERE account_id=? AND kind='daily'", owner)).total, 1);
   assert.equal(dailyWrites, 4);
   console.log('PASS once-per-day claim persisted across app instances (Gmail test adapter)');
+  first.service.config.aiKey = 'test-only-key';
+  await first.service.saveRules(owner, { ...rules, daily: false, agent: { ...DEFAULT_PREFERENCES, consent: true, enabled: true, keepPeople: false } });
+  for (const message of messages.values()) message.labelIds = ['INBOX', 'UNREAD'];
+  const result = await first.service.locked(owner, guard => runAgent(first.service, owner, guard, undefined, 'manual', async () => ({ action: 'read', confidence: .99, reason: 'Test-only AI decision' })));
+  assert.equal(result.changed, 2);
+  assert.equal((await store.get('SELECT count(*) AS total FROM agent_assessments WHERE account_id=?', owner)).total, 2);
+  await first.service.undo(owner, result.runId);
+  assert.ok(messages.get('one').labelIds.includes('UNREAD'));
+  console.log('PASS autonomous agent decisions, durable assessment records, and undo on real Neon (Gmail and AI test adapters)');
   console.log('Neon end-to-end verification passed. Real database and HTTP app; Gmail provider was simulated and no real emails were accessed.');
 } finally {
   if (store) for (const id of [owner, other]) await store.transaction(async tx => {
-    for (const table of ['changes', 'plans', 'runs', 'subscriptions', 'locks', 'sessions']) await tx.run(`DELETE FROM ${table} WHERE account_id=?`, id);
+    for (const table of ['changes', 'plans', 'runs', 'subscriptions', 'locks', 'sessions', 'agent_assessments']) await tx.run(`DELETE FROM ${table} WHERE account_id=?`, id);
     await tx.run('DELETE FROM accounts WHERE id=?', id);
   });
   await Promise.all(applications.map(app => app.close()));

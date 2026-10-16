@@ -14,6 +14,7 @@ export function openStore(directory = 'data') {
     CREATE TABLE IF NOT EXISTS changes (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, account_id TEXT NOT NULL, message_id TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, created INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS subscriptions (account_id TEXT NOT NULL, sender TEXT NOT NULL, message_id TEXT NOT NULL, host TEXT, status TEXT NOT NULL, PRIMARY KEY(account_id,sender));
     CREATE TABLE IF NOT EXISTS locks (account_id TEXT PRIMARY KEY, owner TEXT NOT NULL, expires INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS agent_assessments (account_id TEXT NOT NULL, message_id TEXT NOT NULL, policy_hash TEXT NOT NULL, created INTEGER NOT NULL, PRIMARY KEY(account_id,policy_hash,message_id));
     CREATE INDEX IF NOT EXISTS runs_account ON runs(account_id,created);
     CREATE INDEX IF NOT EXISTS plans_account ON plans(account_id,created);
     CREATE INDEX IF NOT EXISTS changes_account ON changes(account_id,run_id);

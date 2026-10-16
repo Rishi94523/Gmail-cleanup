@@ -17,8 +17,9 @@ function showPage(name) {
   page = ['overview', 'subscriptions', 'rules', 'activity'].includes(name) ? name : 'overview';
   $$('.page').forEach(el => { el.hidden = el.id !== `page-${page}`; });
   $$('.nav-item').forEach(el => { el.classList.toggle('active', el.dataset.page === page); if (el.dataset.page === page) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); });
-  $('#page-name').textContent = { overview: 'Overview', subscriptions: 'Subscriptions', rules: 'Cleanup rules', activity: 'Activity' }[page];
+  $('#page-name').textContent = { overview: 'Overview', subscriptions: 'Subscriptions', rules: 'Preferences', activity: 'Activity' }[page];
   history.replaceState(null, '', `/#${page}`);
+  window.scrollTo({ top: 0, behavior: 'instant' });
 }
 async function request(path, data) {
   const response = await fetch(path, data === undefined ? { credentials: 'same-origin' } : { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state?.csrf || '' }, body: JSON.stringify(data) });
@@ -30,11 +31,12 @@ function setBusy(value, button, label) {
   $$('#preview-body input').forEach(el => { el.disabled = value || el.dataset.eligible !== 'true'; });
   if (button) { if (value) { button.dataset.originalText = button.textContent; button.textContent = label; button.disabled = true; } else { button.textContent = button.dataset.originalText; button.disabled = !state?.connected; } }
   document.body.setAttribute('aria-busy', String(value));
+  if (state) renderAgentControls();
 }
 async function operation(button, label, fn) {
   if (busy) return;
   $('#error-banner').hidden = true; setBusy(true, button, label);
-  try { await fn(); } catch (err) { error(err.message); try { await refresh(false); } catch {} }
+  try { await fn(); } catch (err) { if (button?.id === 'agent-start') { $('#agent-stage').textContent = 'Agent stopped. Check Activity before continuing.'; $('#agent-progress .agent-motion').hidden = true; } error(err.message); try { await refresh(false); } catch {} }
   finally { setBusy(false, button); }
 }
 function connect() {
@@ -94,8 +96,8 @@ function updateSelection() {
 function render() {
   const connected = state.connected; const rules = state.rules;
   $('#account-label').textContent = connected ? state.email : 'Your Gmail'; $('#account-state').textContent = connected ? 'Connected securely' : 'Not connected'; $('#avatar').textContent = connected ? state.email[0].toUpperCase() : 'G';
-  $('#connection-dot').classList.toggle('on', connected); $('#account-button').textContent = connected ? 'Account & rules ↗' : 'Connect Gmail ↗';
-  $('#agent-pill').classList.toggle('on', connected && rules.daily); $('#agent-pill').innerHTML = `<i></i> ${connected && rules.daily ? 'Daily agent on' : 'Agent paused'}`;
+  $('#connection-dot').classList.toggle('on', connected); $('#account-button').textContent = connected ? 'Preferences ↗' : 'Connect Gmail ↗';
+  $('#agent-pill').classList.toggle('on', connected && rules.daily && state.schedulerActive); $('#agent-pill').innerHTML = `<i></i> ${connected && rules.daily && state.schedulerActive ? 'Daily agent on' : 'Agent paused'}`;
   $('#metric-cleaned').textContent = connected ? number(state.totals?.cleaned) : '—';
   $('#metric-unsubscribed').textContent = connected ? number(state.totals?.requested) : '—';
   $('#metric-routine').textContent = rules.daily && connected ? 'Every day' : 'Not set';
@@ -108,6 +110,7 @@ function render() {
   $('#setup-banner').hidden = connected;
   $('#setup-banner').innerHTML = state.configured ? '<div><strong>A calmer inbox starts here.</strong><p>Connect your Gmail, choose your boundaries, and preview your first cleanup. Nothing moves until you approve.</p></div><button class="primary" id="connect-panel">Connect Gmail ↗</button>' : `<div><strong>Your workspace is ready. Gmail needs one more step.</strong><p>Set your Google OAuth client in the server’s <code>.env</code> file, then restart. Missing: ${escape(state.setupMissing.join(', '))}. Setup instructions are in README.md.</p></div><button class="secondary" id="setup-rules">Explore the rules ↗</button>`;
   renderRules(); renderActivity(); renderSubscriptions(); renderPreview();
+  renderAgentPreferences();
   for (const selector of ['#scan-button', '#discover-button', '#save-rules', '#routine-button']) $(selector).disabled = busy || !connected;
   if (!connected) { $('#metric-unread').textContent = '—'; $('#unread-caption').textContent = 'Connect to see your inbox'; }
 }
@@ -178,4 +181,75 @@ if (auth) {
   $('#notice-banner').textContent = messages[auth] || 'Review your connection settings.'; $('#notice-banner').hidden = false;
 }
 showPage(location.hash.slice(1));
-refresh(true).catch(err => error(`The app could not load: ${err.message}`));
+refresh(true).then(() => { if (auth === 'connected' && !state.rules.agent?.enabled) showPage('rules'); }).catch(err => error(`The app could not load: ${err.message}`));
+
+const agentDefaults = { enabled: false, consent: false, keepJobs: true, coldMail: 'exceptional', keepPeople: true, keepNewsletters: true, action: 'read', exceptions: '', interests: '' };
+for (let hour = 0; hour < 24; hour++) $('#pref-hour').add(new Option(`${String(hour).padStart(2, '0')}:00`, hour));
+function renderAgentControls() {
+  const p = { ...agentDefaults, ...state.rules.agent };
+  $('#agent-start').disabled = busy || !state.connected || !state.aiConfigured || !p.enabled;
+  $('#agent-learn').disabled = busy || !state.connected || !state.aiConfigured || !$('#agent-consent').checked;
+  $('#save-preferences').disabled = busy || !state.connected;
+  $('#agent-configure').textContent = p.enabled ? 'Edit preferences →' : 'Set my preferences →';
+  $('#agent-heading').textContent = p.enabled ? 'Your agent is ready.' : 'Let’s get to know your inbox.';
+  $('#agent-status').textContent = !state.aiConfigured ? 'AI setup needed' : p.enabled ? 'Ready' : 'Preferences needed';
+  $('#agent-provider-note').textContent = state.aiConfigured ? 'AI is connected. Saving with AI processing allowed authorizes cleanup using these preferences.' : 'Your Gmail is connected. Add an OpenRouter API key to activate AI. You can save preferences now.';
+  $('#pref-daily').disabled = !state.schedulerActive;
+  $('#agent-schedule-note').textContent = state.schedulerActive ? 'Runs at this time while the server stays running.' : 'Daily scheduling is disabled on this server. Manual agent runs are available once AI is configured.';
+}
+function renderAgentPreferences() {
+  const p = { ...agentDefaults, ...state.rules.agent };
+  for (const [key, id] of [['consent','agent-consent'], ['keepJobs','pref-jobs'], ['keepPeople','pref-people'], ['keepNewsletters','pref-newsletters']]) $(`#${id}`).checked = p[key];
+  for (const [key, id] of [['coldMail','pref-cold'], ['action','pref-action'], ['exceptions','pref-exceptions'], ['interests','pref-interests']]) $(`#${id}`).value = p[key];
+  $('#pref-daily').checked = state.rules.daily; $('#pref-hour').value = state.rules.hour; $('#pref-zone').value = state.rules.timezone;
+  renderAgentControls();
+}
+$('#agent-consent').addEventListener('change', renderAgentControls);
+$('#agent-learn').addEventListener('click', () => operation($('#agent-learn'), 'Learning your inbox…', async () => {
+  const learned = await request('/api/agent/learn', { consent: $('#agent-consent').checked });
+  $('#agent-suggestions').innerHTML = `<strong>${escape(learned.summary)}</strong><ul>${learned.suggestions.map(s => `<li>${escape(s.note)}</li>`).join('')}</ul><p>Based on ${number(learned.inspected)} messages. Adjust the preferences below; no emails were changed.</p>`;
+}));
+$('#preferences-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const consent = $('#agent-consent').checked;
+  const agent = { consent, enabled: consent && state.aiConfigured, keepJobs: $('#pref-jobs').checked, keepPeople: $('#pref-people').checked, keepNewsletters: $('#pref-newsletters').checked, coldMail: $('#pref-cold').value, action: $('#pref-action').value, exceptions: $('#pref-exceptions').value, interests: $('#pref-interests').value };
+  const rules = { ...state.rules, agent, daily: state.schedulerActive && $('#pref-daily').checked, hour: Number($('#pref-hour').value), timezone: $('#pref-zone').value };
+  operation($('#save-preferences'), 'Saving…', async () => { await request('/api/rules', rules); await refresh(); showPage('overview'); toast(agent.enabled ? 'Preferences saved. Start your agent when you’re ready.' : 'Preferences saved. AI needs to be configured before the agent can run.'); });
+});
+$('#agent-start').addEventListener('click', () => operation($('#agent-start'), 'Agent working…', async () => {
+  $('#agent-progress').hidden = false; $('#agent-progress .agent-motion').hidden = false; $('#agent-decisions').innerHTML = ''; $('#agent-stage').textContent = 'Connecting to your inbox'; $('#agent-counts').textContent = ''; $('#agent-meter').value = 0;
+  const response = await fetch('/api/agent/run', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify({ authorize: true }) });
+  if (!response.ok) throw new Error('Agent could not start. Reload and try again.');
+  const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ''; let completed = false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read(); if (done) break;
+      buffer += decoder.decode(value, { stream: true }); let newline;
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        const event = JSON.parse(buffer.slice(0, newline)); buffer = buffer.slice(newline + 1);
+        if (event.type === 'heartbeat') continue;
+        if (event.type === 'error') throw new Error(event.message);
+        if (event.type === 'stage') $('#agent-stage').textContent = event.message;
+        if (event.total) $('#agent-meter').max = event.total;
+        if (event.inspected !== undefined) $('#agent-meter').value = event.inspected;
+        if (event.type === 'decision') {
+          const labels = { keep: 'Kept', read: 'Marked read', archive: 'Archived', both: 'Read & archived' };
+          $('#agent-decisions').insertAdjacentHTML('afterbegin', `<div class="list-row"><div class="row-main"><strong>${escape(labels[event.action])} · ${escape(event.subject)}</strong><p>${escape(event.reason)}</p></div></div>`);
+          while ($('#agent-decisions').children.length > 8) $('#agent-decisions').lastElementChild.remove();
+          $('#agent-counts').textContent = `${number(event.inspected)} read · ${number(event.changed)} changed · ${number(event.kept)} kept`;
+        }
+        if (event.type === 'complete') { completed = true; $('#agent-stage').textContent = event.moreAvailable ? 'Run finished. More unread mail remains.' : 'Run finished.'; $('#agent-counts').textContent = `${number(event.inspected)} inspected · ${number(event.changed)} changed · ${number(event.kept)} kept`; }
+      }
+    }
+    if (!completed) throw new Error('Connection interrupted. Check Activity before starting again.');
+  } finally {
+    await reader.cancel().catch(() => {}); $('#agent-progress .agent-motion').hidden = true; await refresh(true);
+  }
+}));
+const detailsButton = document.createElement('button'); detailsButton.className = 'secondary'; detailsButton.textContent = 'Show agent decisions';
+const decisionHistory = document.createElement('div'); decisionHistory.id = 'agent-history';
+$('#page-activity').append(detailsButton, decisionHistory);
+detailsButton.addEventListener('click', () => operation(detailsButton, 'Loading decisions…', async () => {
+  const result = await request('/api/agent/history', {});
+  decisionHistory.innerHTML = result.logs.length ? result.logs.map(log => `<details><summary>Run · ${number(log.decisions.length)} decisions</summary>${log.decisions.map(d => `<div class="agent-log-entry"><strong>${escape(d.subject)}</strong><p>${escape(d.action)} · ${escape(d.reason)}</p></div>`).join('')}</details>`).join('') : '<p>No agent decisions yet.</p>';
+}));
