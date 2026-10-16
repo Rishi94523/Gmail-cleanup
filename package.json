@@ -9,6 +9,7 @@
   "scripts": {
     "build:web": "vite build --config web/vite.config.ts",
     "check:web": "tsc -p web/tsconfig.json",
+    "start:preview": "node server/preview.js",
     "setup": "node scripts/setup.mjs",
     "start": "node --env-file-if-exists=.env server/index.js",
     "dev": "node --env-file-if-exists=.env --watch server/index.js",

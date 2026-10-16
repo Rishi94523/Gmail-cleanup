@@ -1,0 +1,12 @@
+.gcloudignore
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+data/
+node_modules/
+web/dist/
+.wrangler/
+tests/
+scripts/qa-ui.mjs

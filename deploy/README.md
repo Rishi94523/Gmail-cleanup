@@ -1,0 +1,39 @@
+# Google Cloud Run deployment
+
+## Personal setup
+
+The Google Cloud CLI (`gcloud.cmd`) is installed on the development machine. Its previously saved login has expired; refresh it in your own PowerShell:
+
+```powershell
+gcloud.cmd auth login
+gcloud.cmd projects list
+```
+
+Use your own browser to sign in. Create or select a dedicated project in [Google Cloud Console](https://console.cloud.google.com/projectcreate), and link an active billing account in [Billing](https://console.cloud.google.com/billing). Cloud Run's monthly allowances still apply after the one-time $300 trial, but excess and other services can incur charges. Billing budgets notify; they are not a hard spending cap. No password, credential JSON, or access token needs to be pasted into chat. Send only the project ID when ready.
+
+The app can be built remotely with Cloud Build; Docker Desktop is not required on the development machine. `gcloud auth application-default login` is not required for this deployment script. Deployed services use attached service accounts; GitHub deployment will use Workload Identity Federation rather than a long-lived service-account key.
+
+## First release: public product preview
+
+```powershell
+pwsh -File scripts/deploy-cloudrun.ps1 -ProjectId YOUR_PROJECT_ID
+```
+
+The script verifies billing, enables Run/Build/Artifact Registry APIs, creates an image repository and dedicated runtime/build service accounts if absent, builds the container, deploys the preview, and verifies `/healthz`. It uses explicit project arguments without changing the user's default project. The build identity receives source-object read access on one source bucket, image-write access on this repository, and log-write access in the project. The web runtime identity receives no application data permissions. The account running the script needs sufficient permissions to create these resources, set those bindings, and attach service identities; it never grants Owner or Editor. If access is denied, inspect the stated identity and missing permission before changing IAM.
+
+Defaults: `us-central1`, 1 vCPU, 512 MiB RAM, minimum zero instances, maximum two instances, concurrency 80, request-based CPU allocation. These settings limit the initial deployment's footprint; they are not a spending cap or capacity benchmark. Image storage, builds, logs, networking, and other services have separate billing and allowances.
+
+The public container serves the React marketing site and its labelled example workflow. `/healthz` explicitly reports `gmailEnabled: false`; live Gmail routes return 503. OAuth secrets and local databases are excluded from both Docker and Cloud Build upload contexts. No task queues or scheduled mailbox writes are created in this release.
+
+## Full application rollout
+
+1. Migrate local SQLite records and synchronous data access to shared PostgreSQL, with account isolation, indexed due schedules, transactions, and durable job checkpoints.
+2. Serve the real authenticated dashboard alongside the website/API on Cloud Run.
+3. Deploy a separate private Cloud Run task service. Only the Cloud Tasks invocation identity may invoke it.
+4. Use Cloud Scheduler to invoke a private dispatcher, which selects due accounts and enqueues bounded jobs. Do not create a cron resource per end user.
+5. Preserve user's chosen local time, approvals, protections, pause/disconnect state, and idempotency. Reconcile ambiguous Gmail writes before retries.
+6. Store OAuth credentials, token-encryption material, database connection configuration, and AI keys in Secret Manager with narrowly scoped runtime access.
+7. Configure the Google OAuth web client with the public app's exact `/auth/google/callback` URL, add test users, and verify a connected test mailbox with explicit approval.
+8. Add deployment automation, monitoring, retention, load testing, and public OAuth verification before opening broad signup.
+
+The current Node `server/index.js` and SQLite scheduler remain a local prototype. The production website, worker, and scheduler must not be reported as working Gmail automation until their live paths have been exercised.

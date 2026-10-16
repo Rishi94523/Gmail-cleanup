@@ -2,7 +2,7 @@
 
 **Status: in development.** This repository contains a local Gmail backend prototype and an interactive React/TypeScript product preview. Google Cloud Run is the selected deployment target; production cloud scheduling and deployment are not implemented yet. No live Gmail validation or thousand-user load test has been completed.
 
-The local backend implements OAuth, cleanup review, reversible label changes, and scheduling. Its 19 automated tests use a test-only provider adapter for Gmail actions. Cloudflare deployment files are retained from an earlier hosting exploration; no Cloudflare deployment has been made. See [ARCHITECTURE.md](ARCHITECTURE.md) for the boundary between current implementation and the planned production system.
+The local backend implements OAuth, cleanup review, reversible label changes, and scheduling. Its 20 automated backend/preview tests use a test-only provider adapter for Gmail actions. Cloudflare deployment files are retained from an earlier hosting exploration; no Cloudflare deployment has been made. See [ARCHITECTURE.md](ARCHITECTURE.md) for the boundary between current implementation and the planned production system.
 
 A calm Gmail cleanup application with a real server-side integration, review-before-cleanup, reversible Gmail label changes, subscription discovery, and a daily maintenance agent. No demo mailbox or fabricated provider results are included.
 
@@ -78,11 +78,11 @@ The browser can be closed; **the Node process and persistent storage must remain
 
 Sessions use random, hashed tokens and HttpOnly/SameSite cookies (Secure under HTTPS). OAuth state and PKCE bind callbacks to the initiating session. Mutating API routes require both same-origin requests and CSRF tokens. API data is scoped to the session's connected Gmail account. Disconnect pauses jobs, revokes Google access, and deletes that account's local data and undo history; emails themselves remain as previously modified.
 
-A Dockerfile is included for a long-lived Node host with a persistent volume. Sites' static hosting cannot execute this Node/SQLite scheduler; this repository has not been published as a static demo.
+A multi-stage Dockerfile builds the React site and serves the **public product preview** on port 8080. It intentionally does not deploy the local SQLite scheduler to Cloud Run. See [deployment instructions](deploy/README.md) for CLI login, project setup, and the rollout plan. No application has been deployed yet.
 
 ```powershell
 docker build -t inboxclean .
-docker run --env-file .env -e HOST=0.0.0.0 -p 127.0.0.1:3000:3000 -v inboxclean-data:/app/data inboxclean
+docker run -p 127.0.0.1:8080:8080 inboxclean
 ```
 
 For internet hosting, put the service behind a TLS reverse proxy, configure the external HTTPS `APP_URL` and OAuth redirect, mount persistent storage, and run one application instance. Add operational alerts, encrypted backups, retention policy, and Google-required privacy/verification materials before a public launch. Mail data is not currently auto-purged while an account remains connected, so disk usage must be managed. This is an initial application, not a completed public SaaS launch.

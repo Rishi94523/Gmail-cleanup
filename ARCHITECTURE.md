@@ -9,7 +9,7 @@
 - Optional OpenRouter classification with explicit data-sharing opt-in and validated model decisions.
 - Local timezone-aware scheduler with durable account/day claims and account-level job leases.
 - React/TypeScript product preview and a Dockerfile for the local backend.
-- 19 automated backend tests. Provider behavior is simulated in tests; live Gmail integration remains unverified.
+- 20 automated backend/preview tests. Provider behavior is simulated in tests; live Gmail integration remains unverified.
 
 ## Selected production target: Google Cloud Run
 
@@ -32,3 +32,7 @@ Deploy using GitHub Actions with short-lived cloud identity, health checks, and 
 - Thousand-user load testing or measured infrastructure/AI cost.
 
 The public GitHub repository is a source-code project link; it is not evidence of a deployed or fully operational SaaS product.
+
+## Deployment preparation
+
+The React preview now has a multi-stage Cloud Run Docker image, a static HTTP entrypoint, Cloud Build configuration, and a PowerShell deployment script. The script creates a runtime identity without application IAM grants, deploys with a zero-instance minimum and two-instance maximum, and verifies a health endpoint that declares Gmail disabled. Local HTTP tests cover asset boundaries and disabled Gmail routes. This prepares the first public preview; it does not implement production mailbox processing. See [deploy/README.md](deploy/README.md).

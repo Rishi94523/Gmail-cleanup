@@ -5,3 +5,5 @@ node_modules
 .git
 tests
 *.log
+web/dist
+.wrangler

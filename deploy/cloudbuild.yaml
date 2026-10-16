@@ -1,0 +1,12 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: [build, -t, '${_REGION}-docker.pkg.dev/$PROJECT_ID/gmail-cleanup/web:${_IMAGE_TAG}', .]
+  - name: gcr.io/cloud-builders/docker
+    args: [push, '${_REGION}-docker.pkg.dev/$PROJECT_ID/gmail-cleanup/web:${_IMAGE_TAG}']
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/gmail-cleanup/web:${_IMAGE_TAG}'
+substitutions:
+  _REGION: us-central1
+  _IMAGE_TAG: preview
+options:
+  logging: CLOUD_LOGGING_ONLY
