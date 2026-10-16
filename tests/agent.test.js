@@ -13,7 +13,7 @@ import { DEFAULT_PREFERENCES, preferences, decisionFor, emailText, runAgent } fr
 function fixture(t, patch = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'inboxclean-agent-')); const store = openStore(dir); const crypto = encryption(randomBytes(32).toString('base64'));
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
-  const id = 'owner@example.invalid'; const rules = { ...DEFAULT_RULES, agent: { ...DEFAULT_PREFERENCES, enabled: true, consent: true, ...patch } };
+  const id = 'owner@example.invalid'; const rules = { ...DEFAULT_RULES, agent: { ...DEFAULT_PREFERENCES, enabled: true, consent: true, consentProvider: 'openrouter', ...patch } };
   store.run('INSERT INTO accounts(id,email,tokens,rules,created) VALUES(?,?,?,?,?)', id, id, crypto.seal({}), JSON.stringify(rules), Date.now());
   const mails = new Map(['noise', 'person', 'uncertain', 'starred'].map(name => [name, { id: name, historyId: '1', internalDate: String(Date.now()), labelIds: ['INBOX', 'UNREAD', ...(name === 'starred' ? ['STARRED'] : [])], payload: { mimeType: 'text/plain', headers: [{ name: 'From', value: `${name}@example.invalid` }, { name: 'Subject', value: 'A message' }], body: { data: Buffer.from(`Content for ${name}`).toString('base64url') } } }]));
   const writes = []; let fail = false;
@@ -68,4 +68,10 @@ test('ambiguous agent writes remain auditable and undoable; no automatic replay'
 test('agent preferences survive saving advanced filters', async t => {
   const f = fixture(t); await f.service.saveRules(f.id, { ...DEFAULT_RULES, days: 120 });
   assert.equal((await f.service.account(f.id)).rules.agent.enabled, true);
+});
+test('switching AI providers requires fresh consent before any agent mail access', async t => {
+  const f = fixture(t); f.service.config.aiProvider = 'nebius';
+  await assert.rejects(f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', f.infer)), /provider changed/);
+  assert.equal(f.writes.length, 0);
+  await assert.rejects(f.service.saveRules(f.id, f.rules), /selected provider/);
 });

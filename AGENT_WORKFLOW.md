@@ -4,7 +4,7 @@ The main dashboard now asks for preferences, then runs the agent without asking 
 
 ## Implemented locally
 
-- Explicit AI-processing consent. Discovery sends sender/subject metadata from up to 40 inbox messages to OpenRouter and asks for suggestions; it does not change mail or silently enable suggested preferences.
+- Explicit AI-processing consent. Discovery sends sender/subject metadata from up to 40 inbox messages to the selected provider and asks for suggestions; it does not change mail or silently enable suggested preferences. Provider changes require renewed consent, and failures never switch providers automatically.
 - Preferences for recruiting/job opportunities, cold outreach, people previously emailed, newsletters, interests, exceptions, permitted action, and daily schedule.
 - Default permitted action is mark read. Archive and mark read plus archive are separate choices. No delete, trash, send, or automatic unsubscribe tool is available to this agent.
 - Each run collects up to 500 unread inbox message IDs before changes, across internal Gmail pages. It skips persisted assessments for the same preference/model version, allowing subsequent runs to reach further into a backlog without reclassifying kept mail. Enumeration is bounded at 1,000 pages per run. This is not a completed 100,000-message load test.
@@ -17,7 +17,19 @@ The main dashboard now asks for preferences, then runs the agent without asking 
 
 ## Configuration
 
-Save an OpenRouter key as `AI_API_KEY` in the ignored `.env`, preserve the existing `AI_MODEL`, restart the server, then allow AI processing and save preferences in the app. Key presence alone does not authorize processing a connected mailbox.
+Set the provider in the ignored `.env`, restart the server, then allow AI processing and save preferences in the app. Key presence alone does not authorize processing a connected mailbox.
+
+```dotenv
+AI_PROVIDER=nebius
+NEBIUS_API_KEY=your-local-key
+NEBIUS_MODEL=nvidia/Nemotron-3.5-Super-VL
+```
+
+To switch to OpenRouter, change only `AI_PROVIDER=openrouter` and configure `OPENROUTER_API_KEY` and `OPENROUTER_MODEL`. Legacy `AI_API_KEY` / `AI_MODEL` remain OpenRouter-only aliases. Each provider's model and key stay separate; a Nebius selection never reads an OpenRouter key. Nebius uses `https://api.tokenfactory.us-north1.nebius.com/v1/chat/completions`, matching the supplied hackathon example.
+
+`npm.cmd run ai:check` sends one synthetic JSON connectivity request to the selected provider, without reading Gmail. The shared transport requests JSON, rejects incomplete output, uses a 120-second timeout, and redacts provider error bodies. Both discovery and advanced/autonomous decisions use it. Jev's typed decision API is a future adapter/evaluation task; changing to OpenRouter alone does not implement Jev support.
+
+Nebius reference: https://docs.tokenfactory.nebius.com/ai-models-inference/json . Live Nemotron JSON-mode support and account access must be verified once the key is present.
 
 Run `npm.cmd run db:migrate` before starting this version against Postgres. Migration 002 adds an assessment ledger; the existing encrypted plans/changes/runs tables hold decision history and undo records.
 

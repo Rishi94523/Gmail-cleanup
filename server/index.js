@@ -9,9 +9,10 @@ import { DEFAULT_RULES } from './rules.js';
 import { InboxService } from './service.js';
 import { jsonFetch } from './gmail.js';
 import { learnInbox, runAgent } from './agent.js';
+import { aiConfig } from './ai.js';
 
 export async function createApp(options = {}) {
-  const config = { port: Number(process.env.PORT || 3000), host: process.env.HOST || '127.0.0.1', appUrl: process.env.APP_URL || 'http://localhost:3000', clientId: process.env.GOOGLE_CLIENT_ID || '', clientSecret: process.env.GOOGLE_CLIENT_SECRET || '', encryptionKey: process.env.TOKEN_ENCRYPTION_KEY || '', aiKey: process.env.AI_API_KEY || '', aiModel: process.env.AI_MODEL || 'google/gemini-2.5-flash', databaseUrl: process.env.DATABASE_URL || '', scheduler: !process.env.K_SERVICE && process.env.ENABLE_LOCAL_SCHEDULER !== 'false', ...options.config };
+  const config = { port: Number(process.env.PORT || 3000), host: process.env.HOST || '127.0.0.1', appUrl: process.env.APP_URL || 'http://localhost:3000', clientId: process.env.GOOGLE_CLIENT_ID || '', clientSecret: process.env.GOOGLE_CLIENT_SECRET || '', encryptionKey: process.env.TOKEN_ENCRYPTION_KEY || '', ...aiConfig(), databaseUrl: process.env.DATABASE_URL || '', scheduler: !process.env.K_SERVICE && process.env.ENABLE_LOCAL_SCHEDULER !== 'false', ...options.config };
   const origin = new URL(config.appUrl).origin;
   if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(origin).hostname) && !origin.startsWith('https://')) throw new Error('APP_URL must use HTTPS outside localhost.');
   if (process.env.K_SERVICE && !config.databaseUrl && !options.store) throw new Error('Cloud Run requires a shared Postgres DATABASE_URL. SQLite is local-only.');
@@ -60,7 +61,7 @@ export async function createApp(options = {}) {
           store.all('SELECT sender,host,status FROM subscriptions WHERE account_id=? ORDER BY sender LIMIT 200', account.id),
           service ? service.latestPlan(account.id) : null
         ]) : null;
-        return json(res, 200, { csrf: session.csrf, configured: ready, aiConfigured: Boolean(config.aiKey), schedulerActive: Boolean(config.scheduler), connected: Boolean(account), email: account?.email || null, rules: account ? JSON.parse(account.rules) : DEFAULT_RULES, lastDay: account?.last_day || null, lastError: account?.last_error || null, totals: details ? { cleaned: details[0].total, requested: details[1].total } : null, setupMissing: [!config.clientId && 'GOOGLE_CLIENT_ID', !config.clientSecret && 'GOOGLE_CLIENT_SECRET', !crypto && 'TOKEN_ENCRYPTION_KEY'].filter(Boolean), plan: details?.[4] || null, runs: details ? details[2].map(run => ({ ...run, undoable: Boolean(run.undoable) })) : [], subscriptions: details?.[3] || [] });
+        return json(res, 200, { csrf: session.csrf, configured: ready, aiConfigured: Boolean(config.aiKey), aiProvider: config.aiProvider, aiModel: config.aiModel, schedulerActive: Boolean(config.scheduler), connected: Boolean(account), email: account?.email || null, rules: account ? JSON.parse(account.rules) : DEFAULT_RULES, lastDay: account?.last_day || null, lastError: account?.last_error || null, totals: details ? { cleaned: details[0].total, requested: details[1].total } : null, setupMissing: [!config.clientId && 'GOOGLE_CLIENT_ID', !config.clientSecret && 'GOOGLE_CLIENT_SECRET', !crypto && 'TOKEN_ENCRYPTION_KEY'].filter(Boolean), plan: details?.[4] || null, runs: details ? details[2].map(run => ({ ...run, undoable: Boolean(run.undoable) })) : [], subscriptions: details?.[3] || [] });
       }
       if (url.pathname === '/auth/google' && req.method === 'GET') {
         if (!ready) return redirect(res, '/?auth=setup');
@@ -102,7 +103,7 @@ export async function createApp(options = {}) {
         if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
         if (req.headers.origin !== origin || req.headers['x-csrf-token'] !== session.csrf || !req.headers['content-type']?.startsWith('application/json')) return json(res, 403, { error: 'Request could not be verified. Reload the app and try again.' });
         const input = await body(req);
-        if (url.pathname === '/api/agent/learn') return json(res, 200, await service.locked(id, () => learnInbox(service, id, input.consent)));
+        if (url.pathname === '/api/agent/learn') return json(res, 200, await service.locked(id, () => learnInbox(service, id, input.consent, input.provider)));
         if (url.pathname === '/api/agent/history') {
           const logs = await store.all("SELECT payload FROM plans WHERE account_id=? AND status='agent_log' ORDER BY created DESC LIMIT 10", id);
           return json(res, 200, { logs: logs.map(row => crypto.open(row.payload)) });

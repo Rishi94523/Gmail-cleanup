@@ -3,6 +3,7 @@ import { DEFAULT_RULES, validateRules, gmailQuery, headersOf, senderAddress, pro
 import { gmailClient, metadata, mapLimit, classify } from './gmail.js';
 import { unsubscribeUrl, postUnsubscribe } from './security.js';
 import { preferences, runAgent } from './agent.js';
+import { missingAIKey } from './ai.js';
 
 export class InboxService {
   constructor(store, crypto, config, clientFactory = gmailClient) { this.store = store; this.crypto = crypto; this.config = config; this.clientFactory = clientFactory; }
@@ -27,9 +28,10 @@ export class InboxService {
   }
   async saveRules(id, input) {
     const agent = input.agent || (await this.account(id)).rules.agent;
-    const rules = { ...validateRules(input), ...(agent ? { agent: preferences(agent) } : {}) };
-    if (rules.agent?.enabled && !this.config.aiKey) throw new Error('Configure AI_API_KEY before enabling the agent.');
-    if (rules.aiEnabled && !this.config.aiKey) throw new Error('Configure AI_API_KEY on the server before enabling AI classification.');
+    const rules = { ...validateRules(input), aiConsentProvider: input.aiConsentProvider || '', ...(agent ? { agent: preferences(agent) } : {}) };
+    if ((rules.agent?.enabled || rules.aiEnabled) && !this.config.aiKey) throw new Error(missingAIKey(this.config));
+    if (rules.agent?.enabled && rules.agent.consentProvider !== (this.config.aiProvider || 'openrouter')) throw new Error('Confirm AI processing for the selected provider in Preferences.');
+    if (rules.aiEnabled && rules.aiConsentProvider !== (this.config.aiProvider || 'openrouter')) throw new Error('Confirm AI processing for the selected provider before enabling advanced AI review.');
     await this.store.transaction(async tx => {
       await tx.run('UPDATE accounts SET rules=? WHERE id=?', JSON.stringify(rules), id);
       await tx.run("UPDATE plans SET status='expired' WHERE account_id=? AND status='ready'", id);

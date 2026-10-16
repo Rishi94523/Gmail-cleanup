@@ -73,7 +73,7 @@ try {
   assert.equal(dailyWrites, 4);
   console.log('PASS once-per-day claim persisted across app instances (Gmail test adapter)');
   first.service.config.aiKey = 'test-only-key';
-  await first.service.saveRules(owner, { ...rules, daily: false, agent: { ...DEFAULT_PREFERENCES, consent: true, enabled: true, keepPeople: false } });
+  await first.service.saveRules(owner, { ...rules, daily: false, agent: { ...DEFAULT_PREFERENCES, consent: true, consentProvider: first.service.config.aiProvider, enabled: true, keepPeople: false } });
   for (const message of messages.values()) message.labelIds = ['INBOX', 'UNREAD'];
   const result = await first.service.locked(owner, guard => runAgent(first.service, owner, guard, undefined, 'manual', async () => ({ action: 'read', confidence: .99, reason: 'Test-only AI decision' })));
   assert.equal(result.changed, 2);

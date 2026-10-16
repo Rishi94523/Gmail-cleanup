@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 
 const files = execFileSync('git', ['diff', '--cached', '--name-only', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
-const localSecrets = ['.env', '.env.local', 'data/neon-test.env'].filter(existsSync).flatMap(file => readFileSync(file, 'utf8').split(/\r?\n/).filter(line => /^(GOOGLE_CLIENT_SECRET|TOKEN_ENCRYPTION_KEY|AI_API_KEY|DATABASE_URL(?:_UNPOOLED)?|NEON_API_KEY)=/.test(line)).map(line => line.slice(line.indexOf('=') + 1).trim().replace(/^['"]|['"]$/g, '')).filter(value => value.length >= 12));
+const localSecrets = ['.env', '.env.local', 'data/neon-test.env'].filter(existsSync).flatMap(file => readFileSync(file, 'utf8').split(/\r?\n/).filter(line => /^(GOOGLE_CLIENT_SECRET|TOKEN_ENCRYPTION_KEY|AI_API_KEY|OPENROUTER_API_KEY|NEBIUS_API_KEY|DATABASE_URL(?:_UNPOOLED)?|NEON_API_KEY)=/.test(line)).map(line => line.slice(line.indexOf('=') + 1).trim().replace(/^['"]|['"]$/g, '')).filter(value => value.length >= 12));
 const unsafe = [];
 for (const file of files) {
   if ((/(^|\/)\.env(?:\.|$)/.test(file) && file !== '.env.example') || file === '.neon' || /(^|\/)(data|node_modules|\.wrangler)(\/|$)/.test(file) || /\.(sqlite|db|pem|p12|pfx)$/i.test(file)) { unsafe.push(file); continue; }

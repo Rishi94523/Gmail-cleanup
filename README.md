@@ -73,9 +73,9 @@ Every request requires a separate user approval identifying the sender and desti
 
 ## AI review
 
-Cleanup rules work without a language model. To enable real AI classification, set `AI_API_KEY` to an OpenRouter key and optionally set `AI_MODEL` (default `google/gemini-2.5-flash`), then restart.
+The main agent uses AI to decide what matters. Set `AI_PROVIDER=nebius`, `NEBIUS_API_KEY`, and `NEBIUS_MODEL=nvidia/Nemotron-3.5-Super-VL` for the hackathon. Alternatively use `AI_PROVIDER=openrouter`, `OPENROUTER_API_KEY`, and `OPENROUTER_MODEL` (default `google/gemini-2.5-flash`). Legacy `AI_API_KEY` / `AI_MODEL` still work for OpenRouter only. Restart after changing providers. See [AGENT_WORKFLOW.md](AGENT_WORKFLOW.md) for the agent flow and remaining boundaries.
 
-The user must explicitly enable AI review in their rules. Only candidate sender addresses and subject lines, up to 30 per model call, are shared with OpenRouter and the selected model provider. Bodies and OAuth tokens are never included. Provider data policies apply; review them before enabling. Message text is untrusted input. Model outputs are validated, missing/ambiguous decisions keep mail, and AI cannot override deterministic protections. A provider error stops the scan without cleanup.
+The user must explicitly allow AI processing for the selected provider. Discovery shares sender/subject samples; the autonomous agent also shares capped email text, up to 12,000 characters per decision. Advanced batch review shares sender/subject metadata only. Attachments and OAuth tokens are excluded. Provider data policies apply. Message text is untrusted input; invalid or uncertain decisions keep mail, and AI cannot override deterministic protections or escalate the permitted action. A provider error stops remaining work; confirmed earlier changes remain in Activity with undo. The app never silently falls back to a different provider. Run `npm.cmd run ai:check` for a synthetic connectivity test without Gmail access.
 
 ## Daily agent
 

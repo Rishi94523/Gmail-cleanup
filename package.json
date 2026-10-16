@@ -7,7 +7,8 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "build": "npm run check:web && npm run build:web && node --check server/index.js && node --check server/service.js && node --check server/postgres-store.js && node --check server/agent.js && node --check public/app.js",
+    "build": "npm run check:web && npm run build:web && node --check server/index.js && node --check server/service.js && node --check server/postgres-store.js && node --check server/agent.js && node --check server/ai.js && node --check public/app.js",
+    "ai:check": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/check-ai.mjs",
     "db:migrate": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/migrate.mjs",
     "build:web": "vite build --config web/vite.config.ts",
     "check:web": "tsc -p web/tsconfig.json",

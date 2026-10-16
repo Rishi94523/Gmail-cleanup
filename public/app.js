@@ -52,9 +52,9 @@ function renderRules() {
   $('#rule-protected').value = rules.protectedSenders.join('\n'); $('#rule-daily').checked = rules.daily;
   $('#rule-hour').value = rules.hour;
   if (!$$('#rule-zone option').some(option => option.value === rules.timezone)) $('#rule-zone').add(new Option(rules.timezone, rules.timezone));
-  $('#rule-zone').value = rules.timezone; $('#rule-ai').checked = rules.aiEnabled;
+  $('#rule-zone').value = rules.timezone; $('#rule-ai').checked = rules.aiEnabled && rules.aiConsentProvider === (state.aiProvider || 'openrouter');
   $('#rule-ai').disabled = !state.aiConfigured;
-  $('#ai-status').textContent = state.aiConfigured ? 'AI provider is configured. Enable only if you agree to the data sharing described above.' : 'AI is not configured yet. Cleanup rules work without it; add AI_API_KEY to enable AI review.';
+  $('#ai-status').textContent = state.aiConfigured ? `${providerName()} is configured. Enable only if you agree to AI processing.` : `${providerName()} needs its API key before AI can run.`;
   $('#connection-settings-copy').textContent = state.connected ? `Connected as ${state.email}` : 'Connect Gmail to save your preferences.';
   $('#disconnect-button').hidden = !state.connected;
 }
@@ -126,7 +126,7 @@ async function refresh(mailbox = false) {
   }
 }
 function rulesInput() {
-  return { days: Number($('#rule-days').value), categories: $$('input[name=category]:checked').map(input => input.value), archive: $('#rule-archive').checked, markRead: $('#rule-read').checked, protectedSenders: $('#rule-protected').value.split(/[\n,]+/).map(s => s.trim()).filter(Boolean), daily: $('#rule-daily').checked, hour: Number($('#rule-hour').value), timezone: $('#rule-zone').value, aiEnabled: $('#rule-ai').checked };
+  return { days: Number($('#rule-days').value), categories: $$('input[name=category]:checked').map(input => input.value), archive: $('#rule-archive').checked, markRead: $('#rule-read').checked, protectedSenders: $('#rule-protected').value.split(/[\n,]+/).map(s => s.trim()).filter(Boolean), daily: $('#rule-daily').checked, hour: Number($('#rule-hour').value), timezone: $('#rule-zone').value, aiEnabled: $('#rule-ai').checked, aiConsentProvider: $('#rule-ai').checked ? (state.aiProvider || 'openrouter') : '' };
 }
 for (let i = 0; i < 24; i++) $('#rule-hour').add(new Option(`${String(i).padStart(2, '0')}:00`, i));
 $$('[data-page]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.page)));
@@ -183,37 +183,41 @@ if (auth) {
 showPage(location.hash.slice(1));
 refresh(true).then(() => { if (auth === 'connected' && !state.rules.agent?.enabled) showPage('rules'); }).catch(err => error(`The app could not load: ${err.message}`));
 
-const agentDefaults = { enabled: false, consent: false, keepJobs: true, coldMail: 'exceptional', keepPeople: true, keepNewsletters: true, action: 'read', exceptions: '', interests: '' };
+const agentDefaults = { enabled: false, consent: false, consentProvider: '', keepJobs: true, coldMail: 'exceptional', keepPeople: true, keepNewsletters: true, action: 'read', exceptions: '', interests: '' };
+function providerName() { return state.aiProvider === 'nebius' ? 'Nebius Token Factory' : 'OpenRouter'; }
 for (let hour = 0; hour < 24; hour++) $('#pref-hour').add(new Option(`${String(hour).padStart(2, '0')}:00`, hour));
 function renderAgentControls() {
   const p = { ...agentDefaults, ...state.rules.agent };
-  $('#agent-start').disabled = busy || !state.connected || !state.aiConfigured || !p.enabled;
+  const consentMatches = p.consentProvider === (state.aiProvider || 'openrouter');
+  $('#agent-start').disabled = busy || !state.connected || !state.aiConfigured || !p.enabled || !consentMatches;
   $('#agent-learn').disabled = busy || !state.connected || !state.aiConfigured || !$('#agent-consent').checked;
   $('#save-preferences').disabled = busy || !state.connected;
   $('#agent-configure').textContent = p.enabled ? 'Edit preferences →' : 'Set my preferences →';
-  $('#agent-heading').textContent = p.enabled ? 'Your agent is ready.' : 'Let’s get to know your inbox.';
-  $('#agent-status').textContent = !state.aiConfigured ? 'AI setup needed' : p.enabled ? 'Ready' : 'Preferences needed';
-  $('#agent-provider-note').textContent = state.aiConfigured ? 'AI is connected. Saving with AI processing allowed authorizes cleanup using these preferences.' : 'Your Gmail is connected. Add an OpenRouter API key to activate AI. You can save preferences now.';
+  $('#agent-heading').textContent = p.enabled && consentMatches ? 'Your agent is ready.' : 'Let’s get to know your inbox.';
+  $('#agent-status').textContent = !state.aiConfigured ? 'AI setup needed' : p.enabled && consentMatches ? 'Ready' : 'Preferences needed';
+  $('#agent-provider-note').textContent = state.aiConfigured ? `${providerName()} · ${state.aiModel || 'configured model'}. Saving with AI processing allowed authorizes cleanup using these preferences.` : `Add ${state.aiProvider === 'nebius' ? 'NEBIUS_API_KEY' : 'OPENROUTER_API_KEY'} to activate ${providerName()}. You can save preferences now.`;
+  $('#agent-consent-description').textContent = `Shares sender addresses, subjects and up to 12,000 characters of email text per decision with ${providerName()}${state.aiProvider === 'nebius' ? '' : ' and the selected model provider'}. Attachments are excluded.`;
   $('#pref-daily').disabled = !state.schedulerActive;
   $('#agent-schedule-note').textContent = state.schedulerActive ? 'Runs at this time while the server stays running.' : 'Daily scheduling is disabled on this server. Manual agent runs are available once AI is configured.';
 }
 function renderAgentPreferences() {
   const p = { ...agentDefaults, ...state.rules.agent };
   for (const [key, id] of [['consent','agent-consent'], ['keepJobs','pref-jobs'], ['keepPeople','pref-people'], ['keepNewsletters','pref-newsletters']]) $(`#${id}`).checked = p[key];
+  if (p.consentProvider !== (state.aiProvider || 'openrouter')) $('#agent-consent').checked = false;
   for (const [key, id] of [['coldMail','pref-cold'], ['action','pref-action'], ['exceptions','pref-exceptions'], ['interests','pref-interests']]) $(`#${id}`).value = p[key];
   $('#pref-daily').checked = state.rules.daily; $('#pref-hour').value = state.rules.hour; $('#pref-zone').value = state.rules.timezone;
   renderAgentControls();
 }
 $('#agent-consent').addEventListener('change', renderAgentControls);
 $('#agent-learn').addEventListener('click', () => operation($('#agent-learn'), 'Learning your inbox…', async () => {
-  const learned = await request('/api/agent/learn', { consent: $('#agent-consent').checked });
+  const learned = await request('/api/agent/learn', { consent: $('#agent-consent').checked, provider: state.aiProvider || 'openrouter' });
   $('#agent-suggestions').innerHTML = `<strong>${escape(learned.summary)}</strong><ul>${learned.suggestions.map(s => `<li>${escape(s.note)}</li>`).join('')}</ul><p>Based on ${number(learned.inspected)} messages. Adjust the preferences below; no emails were changed.</p>`;
 }));
 $('#preferences-form').addEventListener('submit', event => {
   event.preventDefault();
   const consent = $('#agent-consent').checked;
-  const agent = { consent, enabled: consent && state.aiConfigured, keepJobs: $('#pref-jobs').checked, keepPeople: $('#pref-people').checked, keepNewsletters: $('#pref-newsletters').checked, coldMail: $('#pref-cold').value, action: $('#pref-action').value, exceptions: $('#pref-exceptions').value, interests: $('#pref-interests').value };
-  const rules = { ...state.rules, agent, daily: state.schedulerActive && $('#pref-daily').checked, hour: Number($('#pref-hour').value), timezone: $('#pref-zone').value };
+  const agent = { consent, consentProvider: consent ? (state.aiProvider || 'openrouter') : '', enabled: consent && state.aiConfigured, keepJobs: $('#pref-jobs').checked, keepPeople: $('#pref-people').checked, keepNewsletters: $('#pref-newsletters').checked, coldMail: $('#pref-cold').value, action: $('#pref-action').value, exceptions: $('#pref-exceptions').value, interests: $('#pref-interests').value };
+  const rules = { ...state.rules, agent, aiEnabled: state.rules.aiEnabled && state.rules.aiConsentProvider === (state.aiProvider || 'openrouter'), daily: state.schedulerActive && $('#pref-daily').checked, hour: Number($('#pref-hour').value), timezone: $('#pref-zone').value };
   operation($('#save-preferences'), 'Saving…', async () => { await request('/api/rules', rules); await refresh(); showPage('overview'); toast(agent.enabled ? 'Preferences saved. Start your agent when you’re ready.' : 'Preferences saved. AI needs to be configured before the agent can run.'); });
 });
 $('#agent-start').addEventListener('click', () => operation($('#agent-start'), 'Agent working…', async () => {
