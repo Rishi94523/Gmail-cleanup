@@ -10,7 +10,7 @@ import { DEFAULT_RULES } from '../server/rules.js';
 
 async function setup(t, configured = false) {
   const directory = mkdtempSync(join(tmpdir(), 'inboxclean-http-'));
-  const app = createApp({ dataDir: directory, config: { appUrl: 'http://localhost:3000', encryptionKey: configured ? randomBytes(32).toString('base64') : '', clientId: configured ? 'fixture-client' : '', clientSecret: configured ? 'fixture-secret' : '' } });
+  const app = await createApp({ dataDir: directory, config: { databaseUrl: '', appUrl: 'http://localhost:3000', encryptionKey: configured ? randomBytes(32).toString('base64') : '', clientId: configured ? 'fixture-client' : '', clientSecret: configured ? 'fixture-secret' : '' } });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${app.server.address().port}`;
   t.after(async () => { await app.close(); rmSync(directory, { recursive: true, force: true }); });

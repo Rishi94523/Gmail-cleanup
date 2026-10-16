@@ -1,0 +1,13 @@
+CREATE TABLE accounts (id TEXT PRIMARY KEY, email TEXT NOT NULL, tokens TEXT NOT NULL, rules TEXT NOT NULL, last_day TEXT, last_error TEXT, created BIGINT NOT NULL);
+CREATE TABLE sessions (id TEXT PRIMARY KEY, account_id TEXT, csrf TEXT NOT NULL, expires BIGINT NOT NULL);
+CREATE TABLE oauth_states (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, verifier TEXT NOT NULL, expires BIGINT NOT NULL);
+CREATE TABLE plans (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, created BIGINT NOT NULL);
+CREATE TABLE runs (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, total INTEGER NOT NULL DEFAULT 0, changed INTEGER NOT NULL DEFAULT 0, skipped INTEGER NOT NULL DEFAULT 0, detail TEXT, created BIGINT NOT NULL);
+CREATE TABLE changes (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, account_id TEXT NOT NULL, message_id TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, created BIGINT NOT NULL);
+CREATE TABLE subscriptions (account_id TEXT NOT NULL, sender TEXT NOT NULL, message_id TEXT NOT NULL, host TEXT, status TEXT NOT NULL, PRIMARY KEY(account_id,sender));
+CREATE TABLE locks (account_id TEXT PRIMARY KEY, owner TEXT NOT NULL, expires BIGINT NOT NULL);
+CREATE INDEX runs_account ON runs(account_id,created);
+CREATE INDEX plans_account ON plans(account_id,created);
+CREATE INDEX changes_account ON changes(account_id,run_id);
+CREATE INDEX sessions_expiry ON sessions(expires);
+CREATE INDEX oauth_states_expiry ON oauth_states(expires);

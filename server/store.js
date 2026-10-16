@@ -19,10 +19,16 @@ export function openStore(directory = 'data') {
     CREATE INDEX IF NOT EXISTS changes_account ON changes(account_id,run_id);
   `);
   return {
+    kind: 'sqlite',
     db,
     get: (sql, ...args) => db.prepare(sql).get(...args),
     all: (sql, ...args) => db.prepare(sql).all(...args),
     run: (sql, ...args) => db.prepare(sql).run(...args),
-    close: () => db.close()
+    close: () => db.close(),
+    async transaction(fn) {
+      db.exec('BEGIN IMMEDIATE');
+      try { const result = await fn(this); db.exec('COMMIT'); return result; }
+      catch (error) { db.exec('ROLLBACK'); throw error; }
+    }
   };
 }

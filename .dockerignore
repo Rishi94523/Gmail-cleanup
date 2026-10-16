@@ -7,3 +7,4 @@ tests
 *.log
 web/dist
 .wrangler
+.neon

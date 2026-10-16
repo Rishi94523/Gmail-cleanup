@@ -29,7 +29,7 @@ The first preview was deployed on October 16, 2026 to `gmail-cleanup-511806` in 
 
 ## Full application rollout
 
-1. Migrate local SQLite records and synchronous data access to shared PostgreSQL, with account isolation, indexed due schedules, transactions, and durable job checkpoints.
+1. Shared PostgreSQL storage and asynchronous data access are now implemented and verified against Neon; existing local SQLite records are not automatically migrated. Configure its pooled URL in Cloud Run Secret Manager before deploying the real backend.
 2. Serve the real authenticated dashboard alongside the website/API on Cloud Run.
 3. Deploy a separate private Cloud Run task service. Only the Cloud Tasks invocation identity may invoke it.
 4. Use Cloud Scheduler to invoke a private dispatcher, which selects due accounts and enqueues bounded jobs. Do not create a cron resource per end user.
@@ -38,4 +38,4 @@ The first preview was deployed on October 16, 2026 to `gmail-cleanup-511806` in 
 7. Configure the Google OAuth web client with the public app's exact `/auth/google/callback` URL, add test users, and verify a connected test mailbox with explicit approval.
 8. Add deployment automation, monitoring, retention, load testing, and public OAuth verification before opening broad signup.
 
-The current Node `server/index.js` and SQLite scheduler remain a local prototype. The production website, worker, and scheduler must not be reported as working Gmail automation until their live paths have been exercised.
+The Node `server/index.js` now uses Neon Postgres when configured and disables its process-local scheduler under Cloud Run. It remains separate from the deployed marketing preview. The production API, worker, and scheduler must not be reported as working Gmail automation until their live paths have been exercised.

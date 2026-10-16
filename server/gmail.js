@@ -14,7 +14,7 @@ export function gmailClient(account, config, saveTokens) {
   async function accessToken() {
     if (tokens.access_token && tokens.expires_at > Date.now() + 60000) return tokens.access_token;
     const refreshed = await jsonFetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: config.clientId, client_secret: config.clientSecret, refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }) });
-    tokens = { ...tokens, ...refreshed, expires_at: Date.now() + refreshed.expires_in * 1000 }; saveTokens(tokens); return tokens.access_token;
+    tokens = { ...tokens, ...refreshed, expires_at: Date.now() + refreshed.expires_in * 1000 }; await saveTokens(tokens); return tokens.access_token;
   }
   return async (path, body, method) => {
     const token = await accessToken();

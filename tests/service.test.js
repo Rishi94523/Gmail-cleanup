@@ -50,7 +50,7 @@ test('starred mail is protected even when it becomes starred after preview', asy
 });
 test('changing rules invalidates the preview', async t => {
   const f = fixture(t); const plan = await f.service.scan(f.accountId);
-  f.service.saveRules(f.accountId, { ...DEFAULT_RULES, days: 180 });
+  await f.service.saveRules(f.accountId, { ...DEFAULT_RULES, days: 180 });
   await assert.rejects(f.service.apply(f.accountId, plan.id, ['one']), /expired/); assert.equal(f.writes.length, 0);
 });
 test('arbitrary IDs, plans from another account, and overlapping jobs are rejected', async t => {
@@ -69,7 +69,7 @@ test('ambiguous provider writes are recorded, never replayed, and can be reconci
 });
 test('daily agent runs once per account-local day and only after explicit enabling', async t => {
   const f = fixture(t); await f.service.daily(); assert.equal(f.writes.length, 0);
-  f.service.saveRules(f.accountId, { ...DEFAULT_RULES, daily: true, hour: 0, timezone: 'UTC' });
+  await f.service.saveRules(f.accountId, { ...DEFAULT_RULES, daily: true, hour: 0, timezone: 'UTC' });
   await f.service.daily(); assert.equal(f.writes.length, 2);
   await f.service.daily(); assert.equal(f.writes.length, 2);
   assert.equal(f.store.get('SELECT kind FROM runs').kind, 'daily');
@@ -80,6 +80,6 @@ test('next batch token is stored server-side and scoped to the owning account', 
   await f.service.scan(f.accountId, 'manual', plan.id); assert.ok(f.reads.some(path => path.includes('pageToken=next-token')));
   await assert.rejects(f.service.scan(f.accountId, 'manual', plan.id), /expired/);
 });
-test('AI cannot be enabled without a configured provider', t => {
-  const f = fixture(t); assert.throws(() => f.service.saveRules(f.accountId, { ...DEFAULT_RULES, aiEnabled: true }), /AI_API_KEY/);
+test('AI cannot be enabled without a configured provider', async t => {
+  const f = fixture(t); await assert.rejects(f.service.saveRules(f.accountId, { ...DEFAULT_RULES, aiEnabled: true }), /AI_API_KEY/);
 });

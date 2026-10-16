@@ -2,18 +2,18 @@
 
 ## Implemented locally
 
-- JavaScript Node.js backend with REST endpoints and SQLite persistence.
+- JavaScript Node.js backend with asynchronous REST/storage operations and shared PostgreSQL persistence on Neon; SQLite remains a local/test fallback.
 - Google OAuth 2.0 authorization-code flow with state, PKCE, offline access, encrypted tokens, and CSRF-protected writes.
 - Configurable Gmail queries, bounded/paginated metadata scans, explicit cleanup approvals, per-message label deltas, and undo.
 - User-approved HTTPS one-click unsubscribe requests for supported headers; manual Gmail review otherwise.
 - Optional OpenRouter classification with explicit data-sharing opt-in and validated model decisions.
 - Local timezone-aware scheduler with durable account/day claims and account-level job leases.
 - React/TypeScript product preview and a Dockerfile for the local backend.
-- 20 automated backend/preview tests. Provider behavior is simulated in tests; live Gmail integration remains unverified.
+- 21 automated backend/preview tests, plus real-Neon HTTP/integration and production restart checks. Provider behavior is simulated in tests; live Gmail integration remains unverified.
 
 ## Selected production target: Google Cloud Run
 
-The intended production frontend is React and TypeScript. The intended backend is TypeScript/NestJS with PostgreSQL/Prisma. These are migration targets, not claims about the current JavaScript/SQLite prototype.
+The frontend is React and TypeScript. The current backend is JavaScript/Node with the `pg` PostgreSQL driver, versioned SQL migrations, and native HTTP handlers. TypeScript/NestJS and Prisma remain possible future choices; neither is implemented or required by the current database setup.
 
 Deploy separate stateless API and task-handler services as Docker containers. Use PostgreSQL for account-owned records, schedules, approvals, audit history, and durable checkpoints. Replace process-local timers with a Cloud Scheduler dispatcher that finds due accounts and enqueues authenticated Cloud Tasks HTTP requests. The worker processes bounded batches and persists progress before returning.
 
@@ -25,7 +25,7 @@ Deploy using GitHub Actions with short-lived cloud identity, health checks, and 
 
 ## Not implemented or verified yet
 
-- Production NestJS/PostgreSQL migration, Cloud Tasks, Cloud Scheduler, Secret Manager, and GitHub Actions deployment.
+- Cloud Tasks, Cloud Scheduler, Secret Manager configuration, and GitHub Actions deployment. The Neon PostgreSQL schema and async storage migration are implemented and tested locally.
 - Google Cloud Run deployment of the real Gmail backend and task services. The public product preview is deployed separately.
 - Live OAuth/token refresh, real Gmail changes, real unsubscribe delivery, or real model-provider responses.
 - Public Google OAuth verification and any required security assessment.

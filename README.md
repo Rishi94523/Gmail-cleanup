@@ -2,13 +2,13 @@
 
 **Status: in development.** [Open the public product preview](https://gmail-cleanup-web-450826266929.us-central1.run.app), deployed on Google Cloud Run. This repository also contains a local Gmail backend prototype. Production mailbox processing and cloud scheduling are not implemented yet. No live Gmail validation or thousand-user load test has been completed.
 
-The local backend implements OAuth, cleanup review, reversible label changes, and scheduling. Its 20 automated backend/preview tests use a test-only provider adapter for Gmail actions. Cloudflare deployment files are retained from an earlier hosting exploration; no Cloudflare deployment has been made. See [ARCHITECTURE.md](ARCHITECTURE.md) for the boundary between current implementation and the planned production system.
+The backend now uses shared PostgreSQL on Neon when `DATABASE_URL` is configured, with SQLite retained for offline development/tests. It implements OAuth, cleanup review, reversible label changes, and local scheduling. Its 21 automated tests use a test-only provider adapter for Gmail actions. Real-Neon integration checks additionally verify HTTP flows, persistence across app instances/restarts, transaction rollback, and account locks. See [NEON_SETUP.md](NEON_SETUP.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for the validated scope and remaining cloud work.
 
 A calm Gmail cleanup application with a real server-side integration, review-before-cleanup, reversible Gmail label changes, subscription discovery, and a daily maintenance agent. No demo mailbox or fabricated provider results are included.
 
 ## Run locally
 
-Requires Node.js 24+. The backend uses Node's built-in SQLite and crypto modules; Playwright is a development dependency for interface verification.
+Requires Node.js 24+. The backend uses `pg` for PostgreSQL, Node crypto, and an optional local SQLite adapter. Playwright is a development dependency for interface verification.
 
 ```powershell
 npm.cmd ci
@@ -20,6 +20,21 @@ npm.cmd start
 Open http://localhost:3000. Until OAuth is configured, the app shows setup instructions and lets you explore the rules. It cannot read or change Gmail yet. The generated encryption key stays in the ignored `.env` file; do not share or commit it.
 
 The separate public-facing React preview builds with `npm.cmd run check:web` and `npm.cmd run build:web`. Its controls use explicitly labelled example messages and never access Gmail. The local dashboard is served by the Node backend above.
+
+## Neon Postgres
+
+`neon.ts` declares the Postgres-only setup. The ignored `.neon` file links the selected project/branch; `neon deploy` applies its policy and pulls `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, and `NEON_BRANCH` into `.env` (or `.env.local`). Both files are supported by the app scripts. Never put database URLs in frontend `VITE_*` variables or commit them.
+
+The application reuses a small `pg.Pool` with the pooled URL. Versioned migrations use the direct URL and a transaction/advisory lock. TLS certificate verification is explicit for Neon, with channel binding enabled. Cloud Run startup refuses local SQLite, and the local timer is disabled automatically in Cloud Run; production daily processing still requires Cloud Tasks/Scheduler.
+
+```powershell
+neon.cmd deploy
+npm.cmd run db:migrate
+npm.cmd run build
+npm.cmd start
+```
+
+Test schema changes on an expiring Neon branch first. The initial migration was validated that way before application to production. Existing local SQLite data is not automatically copied into Neon; no mailbox/account records were migrated during setup. See [NEON_SETUP.md](NEON_SETUP.md) for the real database verification commands and results.
 
 ## Configure Google Gmail access
 
@@ -74,7 +89,7 @@ The browser can be closed; **the Node process and persistent storage must remain
 
 ## Storage and deployment
 
-`data/inboxclean.sqlite` stores per-account rules, encrypted OAuth tokens, encrypted scan metadata/cleanup deltas, sessions, activity, subscription sender addresses, and job leases. Tokens and email metadata use AES-256-GCM with `TOKEN_ENCRYPTION_KEY`. Account addresses, rules, activity descriptions, and subscription addresses remain ordinary database fields; protect the disk and backups. Keep the encryption key stable and backed up separately from the database. Losing it prevents token recovery and undo.
+The configured Neon PostgreSQL database stores per-account rules, encrypted OAuth tokens, encrypted scan metadata/cleanup deltas, sessions, activity, subscription sender addresses, and job leases. Without `DATABASE_URL`, local development uses `data/inboxclean.sqlite` instead. Tokens and email metadata use AES-256-GCM with `TOKEN_ENCRYPTION_KEY`. Account addresses, rules, activity descriptions, and subscription addresses remain ordinary database fields; protect database access and backups. Keep the encryption key stable and backed up separately from the database. Losing it prevents token recovery and undo.
 
 Sessions use random, hashed tokens and HttpOnly/SameSite cookies (Secure under HTTPS). OAuth state and PKCE bind callbacks to the initiating session. Mutating API routes require both same-origin requests and CSRF tokens. API data is scoped to the session's connected Gmail account. Disconnect pauses jobs, revokes Google access, and deletes that account's local data and undo history; emails themselves remain as previously modified.
 
