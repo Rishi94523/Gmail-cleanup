@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { headersOf, senderAddress } from './rules.js';
+import { PREFERENCE_CATEGORIES, categoryScope, discoveryModelKey } from './preference-categories.js';
 
 export const ASK_PREFERENCE_TOOL = {
-  type: 'function', function: { name: 'ask_preference', description: 'Ask the user a persistent multiple-choice question when their intent for this sender or mailing list is unclear. The current email is left unchanged; the user can answer later. The server supplies permitted options and binds the scope to the current message. Never wait for an answer.', parameters: { type: 'object', additionalProperties: false, properties: { question: { type: 'string', maxLength: 240 }, reason: { type: 'string', maxLength: 400 } }, required: ['question', 'reason'] } }
+  type: 'function', function: { name: 'ask_preference', description: 'Ask one broad category preference that applies across products and senders. Never ask whether the user wants a specific brand or mailing list. Reuse existing category preferences; sender exceptions are managed separately by the user. The email stays unchanged. The server supplies canonical wording and permitted choices. Never wait for an answer.', parameters: { type: 'object', additionalProperties: false, properties: { category: { type: 'string', enum: Object.keys(PREFERENCE_CATEGORIES) }, question: { type: 'string', maxLength: 240 }, reason: { type: 'string', maxLength: 400 } }, required: ['category', 'question', 'reason'] } }
 };
 export function scopeFor(message) {
   const h = headersOf(message); const sender = senderAddress(h.from);
@@ -11,23 +12,32 @@ export function scopeFor(message) {
 }
 export function choicesFor(p, scope) {
   const labels = { read: 'Mark future low-priority mail as read', archive: 'Archive future low-priority mail', both: 'Mark read and archive future low-priority mail' };
-  return [{ id: 'keep', label: 'Always keep this sender or list' }, { id: p.action, label: labels[p.action] }, ...(p.autoUnsubscribe && scope.listId ? [{ id: 'unsubscribe', label: 'Unsubscribe from future unwanted marketing on this list' }] : []), { id: 'later', label: 'Ask me tomorrow; leave emails alone' }];
+  return [{ id: 'keep', label: scope.kind === 'category' ? 'Keep these in my inbox' : 'Always keep this sender or list' }, { id: p.action, label: labels[p.action] }, ...(p.autoUnsubscribe && scope.listId ? [{ id: 'unsubscribe', label: 'Unsubscribe from future unwanted marketing on this list' }] : []), { id: 'later', label: 'Ask me tomorrow; leave emails alone' }];
 }
 export async function memoryFor(service, id, scope) {
   const row = await service.store.get('SELECT id,payload,version FROM preference_memories WHERE account_id=? AND scope_hash=?', id, scope.scopeHash);
   return row ? { id: row.id, version: row.version, ...service.crypto.open(row.payload) } : null;
 }
+export async function categoryContext(service, id) {
+  const [memories, questions] = await Promise.all([
+    service.store.all("SELECT id,payload,version FROM preference_memories WHERE account_id=? AND scope_hash LIKE 'category:%'", id),
+    service.store.all("SELECT id,scope_hash FROM agent_questions WHERE account_id=? AND status='pending' AND scope_hash LIKE 'category:%'", id)
+  ]);
+  return { memories: memories.map(r => ({ id: r.id, version: r.version, ...service.crypto.open(r.payload) })), questions };
+}
 export async function holdEmail(service, id, messageId, scope, questionId = null) {
   await service.store.run('INSERT INTO agent_holds(account_id,message_id,scope_hash,question_id,created) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING', id, messageId, scope.scopeHash, questionId, Date.now());
 }
 export async function askPreference(service, id, message, p, args) {
-  if (!args || typeof args.question !== 'string' || !args.question.trim() || args.question.length > 240 || typeof args.reason !== 'string' || args.reason.length > 400 || Object.keys(args).some(k => !['question','reason'].includes(k))) throw new Error('Invalid preference question. Email was left unchanged.');
-  const scope = scopeFor(message); const now = Date.now();
+  if (!args || !categoryScope(args.category) || typeof args.question !== 'string' || !args.question.trim() || args.question.length > 240 || typeof args.reason !== 'string' || args.reason.length > 400 || Object.keys(args).some(k => !['category','question','reason'].includes(k))) throw new Error('Invalid preference question. Email was left unchanged.');
+  const scope = categoryScope(args.category); const now = Date.now();
   const result = await service.store.transaction(async tx => {
     const old = await tx.get('SELECT id,status FROM agent_questions WHERE account_id=? AND scope_hash=?', id, scope.scopeHash);
     if (old && ['pending', 'dismissed'].includes(old.status)) return { id: old.id, status: old.status };
+    const memory = await tx.get('SELECT id FROM preference_memories WHERE account_id=? AND scope_hash=?', id, scope.scopeHash);
+    if (memory) return { id: old?.id || null, status: 'already_learned' };
     const questionId = old?.id || randomUUID();
-    const payload = service.crypto.seal({ question: args.question.trim(), reason: args.reason, scope, options: choicesFor(p, scope), sample: { subject: headersOf(message).subject || '(No subject)' } });
+    const payload = service.crypto.seal({ question: PREFERENCE_CATEGORIES[args.category].question, reason: args.reason, scope, options: choicesFor(p, scope), sample: { subject: headersOf(message).subject || '(No subject)' } });
     if (old) await tx.run("UPDATE agent_questions SET payload=?,status='pending',version=version+1,updated=?,deferred_at=?,snoozed_until=0 WHERE id=? AND account_id=?", payload, now, now + 30000, questionId, id);
     else await tx.run("INSERT INTO agent_questions(id,account_id,scope_hash,payload,status,created,updated,deferred_at) VALUES(?,?,?,?,'pending',?,?,?)", questionId, id, scope.scopeHash, payload, now, now, now + 30000);
     return { id: questionId, status: 'pending' };
@@ -37,10 +47,10 @@ export async function askPreference(service, id, message, p, args) {
 }
 export async function learningTray(service, id) {
   const [questions, memories, discovery, pending] = await Promise.all([
-    service.store.all("SELECT id,payload,version,created,deferred_at FROM agent_questions WHERE account_id=? AND status='pending' AND snoozed_until<=? ORDER BY created LIMIT 20", id, Date.now()),
+    service.store.all("SELECT id,payload,version,created,deferred_at FROM agent_questions WHERE account_id=? AND status='pending' AND scope_hash LIKE 'category:%' AND snoozed_until<=? ORDER BY created LIMIT 20", id, Date.now()),
     service.store.all('SELECT id,payload,version,updated FROM preference_memories WHERE account_id=? ORDER BY updated DESC LIMIT 200', id),
-    service.store.get('SELECT payload FROM agent_discoveries WHERE account_id=? AND provider=? AND model=?', id, service.config.aiProvider || 'openrouter', service.config.aiModel || 'default'),
-    service.store.get("SELECT count(*) AS total FROM agent_questions WHERE account_id=? AND status='pending' AND snoozed_until<=?", id, Date.now())
+    service.store.get('SELECT payload FROM agent_discoveries WHERE account_id=? AND provider=? AND model=?', id, service.config.aiProvider || 'openrouter', discoveryModelKey(service.config.aiModel)),
+    service.store.get("SELECT count(*) AS total FROM agent_questions WHERE account_id=? AND status='pending' AND scope_hash LIKE 'category:%' AND snoozed_until<=?", id, Date.now())
   ]);
   return { questions: questions.map(({ payload, ...row }) => ({ ...row, ...service.crypto.open(payload) })), questionsTotal: pending.total, memories: memories.map(({ payload, ...row }) => ({ ...row, ...service.crypto.open(payload) })), discovery: discovery ? service.crypto.open(discovery.payload) : null };
 }

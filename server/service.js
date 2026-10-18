@@ -27,7 +27,8 @@ export class InboxService {
     finally { clearInterval(heartbeat); await this.store.run('DELETE FROM locks WHERE account_id=? AND owner=?', id, owner); }
   }
   async saveRules(id, input) {
-    const agent = input.agent || (await this.account(id)).rules.agent;
+    const existingAgent = (await this.account(id)).rules.agent;
+    const agent = input.agent ? { ...existingAgent, ...input.agent } : existingAgent;
     const rules = { ...validateRules(input), aiConsentProvider: input.aiConsentProvider || '', ...(agent ? { agent: preferences(agent) } : {}) };
     if ((rules.agent?.enabled || rules.aiEnabled) && !this.config.aiKey) throw new Error(missingAIKey(this.config));
     if (rules.agent?.enabled && rules.agent.consentProvider !== (this.config.aiProvider || 'openrouter')) throw new Error('Confirm AI processing for the selected provider in Preferences.');

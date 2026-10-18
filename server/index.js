@@ -11,6 +11,7 @@ import { jsonFetch } from './gmail.js';
 import { learnInbox, runAgent } from './agent.js';
 import { aiConfig } from './ai.js';
 import { learningTray, answerPreference, editMemory } from './learning.js';
+import { PREFERENCE_CATEGORIES } from './preference-categories.js';
 
 export async function createApp(options = {}) {
   const config = { port: Number(process.env.PORT || 3000), host: process.env.HOST || '127.0.0.1', appUrl: process.env.APP_URL || 'http://localhost:3000', clientId: process.env.GOOGLE_CLIENT_ID || '', clientSecret: process.env.GOOGLE_CLIENT_SECRET || '', encryptionKey: process.env.TOKEN_ENCRYPTION_KEY || '', ...aiConfig(), databaseUrl: process.env.DATABASE_URL || '', scheduler: !process.env.K_SERVICE && process.env.ENABLE_LOCAL_SCHEDULER !== 'false', ...options.config };
@@ -62,7 +63,7 @@ export async function createApp(options = {}) {
           store.all('SELECT sender,host,status FROM subscriptions WHERE account_id=? ORDER BY sender LIMIT 200', account.id),
           service ? service.latestPlan(account.id) : null
         ]) : null;
-        return json(res, 200, { csrf: session.csrf, configured: ready, aiConfigured: Boolean(config.aiKey), aiProvider: config.aiProvider, aiModel: config.aiModel, schedulerActive: Boolean(config.scheduler), connected: Boolean(account), email: account?.email || null, rules: account ? JSON.parse(account.rules) : DEFAULT_RULES, lastDay: account?.last_day || null, lastError: account?.last_error || null, totals: details ? { cleaned: details[0].total, requested: details[1].total } : null, setupMissing: [!config.clientId && 'GOOGLE_CLIENT_ID', !config.clientSecret && 'GOOGLE_CLIENT_SECRET', !crypto && 'TOKEN_ENCRYPTION_KEY'].filter(Boolean), plan: details?.[4] || null, runs: details ? details[2].map(run => ({ ...run, undoable: Boolean(run.undoable) })) : [], subscriptions: details?.[3] || [] });
+        return json(res, 200, { csrf: session.csrf, configured: ready, aiConfigured: Boolean(config.aiKey), aiProvider: config.aiProvider, aiModel: config.aiModel, preferenceCategories: PREFERENCE_CATEGORIES, schedulerActive: Boolean(config.scheduler), connected: Boolean(account), email: account?.email || null, rules: account ? JSON.parse(account.rules) : DEFAULT_RULES, lastDay: account?.last_day || null, lastError: account?.last_error || null, totals: details ? { cleaned: details[0].total, requested: details[1].total } : null, setupMissing: [!config.clientId && 'GOOGLE_CLIENT_ID', !config.clientSecret && 'GOOGLE_CLIENT_SECRET', !crypto && 'TOKEN_ENCRYPTION_KEY'].filter(Boolean), plan: details?.[4] || null, runs: details ? details[2].map(run => ({ ...run, undoable: Boolean(run.undoable) })) : [], subscriptions: details?.[3] || [] });
       }
       if (url.pathname === '/auth/google' && req.method === 'GET') {
         if (!ready) return redirect(res, '/?auth=setup');

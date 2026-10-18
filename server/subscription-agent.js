@@ -29,7 +29,7 @@ export async function subscriptionEvidence(gmail, message) {
 }
 export function unsubscribeEligible(raw, p, message, history, memory) {
   if (!p.autoUnsubscribe || raw?.action !== 'unsubscribe' || raw.emailType !== 'marketing' || typeof raw.confidence !== 'number' || raw.confidence < .995 || raw.confidence > 1) return false;
-  if ((memory && memory.action !== 'unsubscribe') || (raw.subscriptionIntent !== 'unwanted' && memory?.action !== 'unsubscribe')) return false;
+  if (memory?.action === 'keep' || (memory && memory.action !== 'unsubscribe' && memory.scope?.kind !== 'category') || (raw.subscriptionIntent !== 'unwanted' && memory?.action !== 'unsubscribe')) return false;
   if (!scopeFor(message).listId || !unsubscribeUrl(headersOf(message)) || history.length < 2 || history.some(transactional)) return false;
   if (history.some(wantedPublication) && memory?.action !== 'unsubscribe') return false;
   if (!Array.isArray(raw.historyTypes) || raw.historyTypes.length !== history.length) return false;

@@ -198,6 +198,7 @@ function renderAgentControls() {
   $('#agent-start').disabled = busy || !state.connected || !state.aiConfigured || !p.enabled || !consentMatches;
   $('#agent-learn').disabled = busy || !state.connected || !state.aiConfigured || !$('#agent-consent').checked;
   $('#save-preferences').disabled = busy || !state.connected;
+  $('#exception-save').disabled = busy || !state.connected;
   $('#agent-configure').textContent = p.enabled ? 'Edit preferences →' : 'Set my preferences →';
   $('#agent-heading').textContent = p.enabled && consentMatches ? 'Your agent is ready.' : 'Let’s get to know your inbox.';
   $('#agent-status').textContent = !state.aiConfigured ? 'AI setup needed' : p.enabled && consentMatches ? 'Ready' : 'Preferences needed';
@@ -212,6 +213,7 @@ function renderAgentPreferences() {
   if (p.consentProvider !== (state.aiProvider || 'openrouter')) $('#agent-consent').checked = false;
   for (const [key, id] of [['coldMail','pref-cold'], ['action','pref-action'], ['exceptions','pref-exceptions'], ['interests','pref-interests']]) $(`#${id}`).value = p[key];
   $('#pref-daily').checked = state.rules.daily; $('#pref-hour').value = state.rules.hour; $('#pref-zone').value = state.rules.timezone;
+  renderExceptions();
   renderAgentControls();
 }
 $('#agent-consent').addEventListener('change', () => { renderAgentControls(); maybeDiscover(); });
@@ -227,7 +229,7 @@ $('#agent-learn').addEventListener('click', () => { discoveryStarted = false; le
 $('#preferences-form').addEventListener('submit', event => {
   event.preventDefault();
   const consent = $('#agent-consent').checked;
-  const agent = { consent, consentProvider: consent ? (state.aiProvider || 'openrouter') : '', enabled: consent && state.aiConfigured, keepJobs: $('#pref-jobs').checked, keepPeople: $('#pref-people').checked, keepNewsletters: $('#pref-newsletters').checked, autoUnsubscribe: $('#pref-auto-unsubscribe').checked, coldMail: $('#pref-cold').value, action: $('#pref-action').value, exceptions: $('#pref-exceptions').value, interests: $('#pref-interests').value };
+  const agent = { ...state.rules.agent, consent, consentProvider: consent ? (state.aiProvider || 'openrouter') : '', enabled: consent && state.aiConfigured, keepJobs: $('#pref-jobs').checked, keepPeople: $('#pref-people').checked, keepNewsletters: $('#pref-newsletters').checked, autoUnsubscribe: $('#pref-auto-unsubscribe').checked, coldMail: $('#pref-cold').value, action: $('#pref-action').value, exceptions: $('#pref-exceptions').value, interests: $('#pref-interests').value };
   const rules = { ...state.rules, agent, aiEnabled: state.rules.aiEnabled && state.rules.aiConsentProvider === (state.aiProvider || 'openrouter'), daily: agent.enabled && state.schedulerActive && $('#pref-daily').checked, hour: Number($('#pref-hour').value), timezone: $('#pref-zone').value };
   operation($('#save-preferences'), 'Saving…', async () => { await request('/api/rules', rules); await refresh(); showPage('overview'); toast(agent.enabled ? 'Preferences saved. Start your agent when you’re ready.' : 'Preferences saved. AI needs to be configured before the agent can run.'); });
 });
@@ -286,9 +288,9 @@ function renderLearning() {
   const count = learningState.questionsTotal ?? learningState.questions.length;
   $('#question-count').textContent = number(count); $('#question-notice').hidden = count === 0;
   $('#question-notice-title').textContent = `${number(count)} ${count === 1 ? 'question from your agent' : 'questions from your agent'}`;
-  $('#questions-tray').innerHTML = count ? learningState.questions.map(q => `<form class="question-card" data-question="${escape(q.id)}"><p class="eyebrow">${escape(q.scope.listId || q.scope.sender)}</p><h2>${escape(q.question)}</h2><p>${escape(q.reason)}</p><p class="question-context">Example: ${escape(q.sample.subject)}. Left unchanged.</p>${q.options.map(o => `<label class="question-option"><input type="radio" name="answer" value="${escape(o.id)}" required><span>${escape(o.label)}</span></label>`).join('')}<button class="primary" type="submit">Save my answer →</button><p>Applies to future messages. Previously held emails stay as they are.</p></form>`).join('') : empty('You’re all caught up.', 'Questions about uncertain mail will wait here. The agent leaves those emails alone.');
+  $('#questions-tray').innerHTML = count ? learningState.questions.map(q => `<form class="question-card" data-question="${escape(q.id)}"><p class="eyebrow">${escape(q.scope.label || q.scope.listId || q.scope.sender)}</p><h2>${escape(q.question)}</h2><p>${escape(q.reason)}</p><p class="question-context">Example: ${escape(q.sample.subject)}. Left unchanged.</p>${q.options.map(o => `<label class="question-option"><input type="radio" name="answer" value="${escape(o.id)}" required><span>${escape(o.label)}</span></label>`).join('')}<button class="primary" type="submit">Save my answer →</button><p>Applies to future messages. Previously held emails stay as they are.</p></form>`).join('') : empty('You’re all caught up.', 'Questions about uncertain mail will wait here. The agent leaves those emails alone.');
   const labels = { keep: 'Keep in inbox', read: 'Mark low-priority mail read', archive: 'Archive low-priority mail', both: 'Mark read and archive low-priority mail', unsubscribe: 'Unsubscribe from unwanted marketing on this list' };
-  $('#learned-preferences').innerHTML = learningState.memories.length ? learningState.memories.map(m => `<form class="memory-card" data-memory="${escape(m.id)}"><strong>${escape(m.scope.listId || m.scope.sender)}</strong><p>${escape(m.explanation)}</p><label>Future handling<select name="action">${Object.entries(labels).filter(([action]) => action !== 'unsubscribe' || m.scope.listId).map(([action, label]) => `<option value="${action}" ${action === m.action ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="agent-actions"><button class="secondary" type="submit">Save change</button><button class="text-button" type="button" data-remove-memory="${escape(m.id)}">Forget this preference</button></div><small>Version ${number(m.version)} · still follows your allowed actions and protections.</small></form>`).join('') : '<p>As you answer questions, your preferences appear here.</p>';
+  $('#learned-preferences').innerHTML = learningState.memories.length ? learningState.memories.map(m => `<form class="memory-card" data-memory="${escape(m.id)}"><strong>${escape(m.scope.label || m.scope.listId || m.scope.sender)}</strong><p>${escape(m.explanation)}</p><label>Future handling<select name="action">${Object.entries(labels).filter(([action]) => action !== 'unsubscribe' || m.scope.listId).map(([action, label]) => `<option value="${action}" ${action === m.action ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="agent-actions"><button class="secondary" type="submit">Save change</button><button class="text-button" type="button" data-remove-memory="${escape(m.id)}">Forget this preference</button></div><small>Version ${number(m.version)} · still follows your allowed actions and protections.</small></form>`).join('') : '<p>As you answer questions, your preferences appear here.</p>';
   renderDiscovery(learningState.discovery);
 }
 $('#questions-tray').addEventListener('submit', event => {
@@ -307,3 +309,28 @@ $('#learned-preferences').addEventListener('click', event => {
   operation(button, 'Removing…', async () => { await request('/api/agent/memories/edit', { memoryId: memory.id, version: memory.version, remove: true }); await loadLearning(); toast('Preference removed. Earlier held emails stay unchanged.'); });
 });
 setInterval(() => { if (state?.connected && !busy && !document.hidden) loadLearning().catch(() => {}); }, 60000);
+
+function renderExceptions() {
+  const previous = $('#exception-category').value;
+  $('#exception-category').replaceChildren(new Option('All mail from this sender', 'all'), ...Object.entries(state.preferenceCategories || {}).map(([key, item]) => new Option(item.label, key)));
+  if ([...$('#exception-category').options].some(o => o.value === previous)) $('#exception-category').value = previous;
+  const labels = { keep: 'Keep in inbox', read: 'Mark read; keep in inbox', archive: 'Archive', both: 'Mark read and archive' };
+  $('#sender-exceptions').innerHTML = (state.rules.agent?.exceptionsRules || []).map(rule => `<div class="list-row"><div class="row-main"><strong>${escape(rule.value)}</strong><p>${escape(state.preferenceCategories?.[rule.category]?.label || 'All mail')} · ${escape(labels[rule.action])}</p></div><button class="text-button" type="button" data-remove-exception="${escape(rule.id)}">Remove exception</button></div>`).join('');
+}
+$('#exception-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const rule = { id: crypto.randomUUID(), type: $('#exception-type').value, value: $('#exception-value').value, category: $('#exception-category').value, action: $('#exception-action').value };
+  operation($('#exception-save'), 'Saving…', async () => {
+    const latest = await request('/api/status');
+    await request('/api/rules', { ...latest.rules, agent: { ...latest.rules.agent, exceptionsRules: [...(latest.rules.agent?.exceptionsRules || []), rule] } });
+    await refresh(); $('#exception-value').value = ''; toast('Exception saved. Your general preference stays the same.');
+  });
+});
+$('#sender-exceptions').addEventListener('click', event => {
+  const button = event.target.closest('[data-remove-exception]'); if (!button) return;
+  operation(button, 'Removing…', async () => {
+    const latest = await request('/api/status');
+    await request('/api/rules', { ...latest.rules, agent: { ...latest.rules.agent, exceptionsRules: (latest.rules.agent?.exceptionsRules || []).filter(rule => rule.id !== button.dataset.removeException) } });
+    await refresh(); toast('Exception removed. The general category preference applies again.');
+  });
+});

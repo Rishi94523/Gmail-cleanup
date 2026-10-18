@@ -12,6 +12,7 @@ import { DEFAULT_PREFERENCES, runAgent } from '../server/agent.js';
 import { askPreference, answerPreference, editMemory, learningTray, scopeFor } from '../server/learning.js';
 import { unsubscribeEligible, automaticUnsubscribe } from '../server/subscription-agent.js';
 import { chatJSON } from '../server/ai.js';
+import { categoryScope, matchingException, validateExceptions } from '../server/preference-categories.js';
 
 function mail(id, subject = 'Product updates', listId = 'marketing.product.example') {
   const headers = { From: 'offers@product.example', Subject: subject, 'List-ID': `<${listId}>`, 'List-Unsubscribe': '<https://lists.product.example/leave>', 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click', 'Authentication-Results': 'mx.google.com; dkim=pass header.i=@product.example;', 'DKIM-Signature': 'v=1; d=product.example; h=from:subject:list-unsubscribe:list-unsubscribe-post; b=fixture' };
@@ -32,7 +33,40 @@ function fixture(t) {
   };
   return { id, store, crypto, rules, messages, service: new InboxService(store, crypto, { aiKey: 'fixture-only', aiProvider: 'openrouter' }, () => gmail), writes: () => writes };
 }
-const args = { question: 'Do you want updates from this product?', reason: 'Your subscription intent is unclear.' };
+const args = { category: 'product_announcements', question: 'Do you want updates from this product?', reason: 'Your subscription intent is unclear.' };
+test('brand-specific wording is normalized into one broad question across different senders', async t => {
+  const f = fixture(t); const apple = mail('apple'); apple.payload.headers.find(h => h.name === 'From').value = 'news@apple.com';
+  const a = await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
+  const b = await askPreference(f.service, f.id, apple, f.rules.agent, { ...args, question: 'Do you want Apple announcements?' });
+  assert.equal(a.id, b.id);
+  const tray = await learningTray(f.service, f.id); assert.equal(tray.questions.length, 1);
+  assert.equal(tray.questions[0].question, 'Do you want product announcements in your inbox?');
+  assert.equal(tray.questions[0].scope.kind, 'category'); assert.equal(tray.questions[0].scope.sender, undefined);
+  await answerPreference(f.service, f.id, { questionId: a.id, version: tray.questions[0].version, option: 'read' });
+  const again = await askPreference(f.service, f.id, apple, f.rules.agent, args);
+  assert.equal(again.status, 'already_learned'); assert.equal((await learningTray(f.service, f.id)).questions.length, 0);
+});
+test('a category answer applies to another brand and an Apple exception takes precedence', async t => {
+  const f = fixture(t); await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
+  const q = (await learningTray(f.service, f.id)).questions[0]; await answerPreference(f.service, f.id, { questionId: q.id, version: q.version, option: 'keep' });
+  const memory = (await learningTray(f.service, f.id)).memories[0];
+  const apple = mail('apple'); apple.internalDate = String(memory.effectiveFrom + 1000); apple.payload.headers.find(h => h.name === 'From').value = 'news@email.apple.com';
+  const other = mail('other'); other.internalDate = apple.internalDate; other.payload.headers.find(h => h.name === 'From').value = 'news@another-product.example';
+  f.messages.clear(); f.messages.set('apple', apple); f.messages.set('other', other);
+  await f.service.saveRules(f.id, { ...f.rules, agent: { ...f.rules.agent, exceptionsRules: [{ id: 'apple-exception', type: 'domain', value: 'apple.com', category: 'product_announcements', action: 'read' }] } });
+  const result = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', async () => ({ action: 'read', confidence: .99, preferenceCategory: 'product_announcements', categoryConfidence: .99, reason: 'Low-priority announcement' })));
+  assert.equal(result.changed, 1); assert.ok(!apple.labelIds.includes('UNREAD')); assert.ok(other.labelIds.includes('UNREAD'));
+  assert.equal((await learningTray(f.service, f.id)).questions.length, 0);
+});
+test('category scope and exception matching reject unknown categories and misleading domains', () => {
+  assert.equal(categoryScope('a-new-category-per-product'), null);
+  const rules = validateExceptions([{ id: 'apple', type: 'domain', value: 'apple.com', category: 'product_announcements', action: 'keep' }]);
+  assert.equal(matchingException(rules, 'news@email.apple.com', 'product_announcements').action, 'keep');
+  assert.equal(matchingException(rules, 'news@evilapple.com', 'product_announcements'), null);
+  assert.equal(matchingException(rules, 'news@apple.com.evil.example', 'product_announcements'), null);
+  assert.equal(matchingException(rules, 'news@apple.com', 'sales_discounts'), null);
+  assert.throws(() => validateExceptions([{ ...rules[0], value: '*@apple.com' }]), /complete sender/);
+});
 
 test('questions persist, deduplicate, hold mail immediately, and later answers affect only future messages', async t => {
   const f = fixture(t);
@@ -68,13 +102,13 @@ test('saved answers inform new mail while older unseen mail in that scope stays 
   f.messages.get('two').internalDate = String(memory.effectiveFrom - 1000);
   const future = mail('new'); future.internalDate = String(memory.effectiveFrom + 1000); f.messages.set('new', future);
   let calls = 0;
-  const result = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', async (config, prompt, data) => { calls++; assert.equal(data.learnedPreference.action, 'read'); return { action: 'read', confidence: .99, reason: 'User preference' }; }));
-  assert.equal(calls, 1); assert.equal(result.changed, 1); assert.ok(f.messages.get('two').labelIds.includes('UNREAD')); assert.ok(!f.messages.get('new').labelIds.includes('UNREAD'));
+  const result = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', async (config, prompt, data) => { calls++; assert.equal(data.categoryPreferences[0].action, 'read'); return { action: 'read', confidence: .99, reason: 'User preference', preferenceCategory: 'product_announcements', categoryConfidence: .99 }; }));
+  assert.equal(calls, 2); assert.equal(result.changed, 1); assert.ok(f.messages.get('two').labelIds.includes('UNREAD')); assert.ok(!f.messages.get('new').labelIds.includes('UNREAD'));
 });
 test('agent tool calls queue questions without waiting; same-pattern messages and future held runs stay unchanged', async t => {
   const f = fixture(t); let modelCalls = 0;
   const result = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', async () => { modelCalls++; return { requestPreference: args }; }));
-  assert.equal(result.changed, 0); assert.equal(modelCalls, 1); assert.equal(f.writes(), 0);
+  assert.equal(result.changed, 0); assert.equal(modelCalls, 2); assert.equal(f.writes(), 0);
   assert.equal((await learningTray(f.service, f.id)).questions.length, 1); assert.equal(f.store.get('SELECT count(*) AS n FROM agent_holds').n, 2);
 });
 test('ask_preference transport exposes only the declared tool; unknown tool calls are rejected', async () => {

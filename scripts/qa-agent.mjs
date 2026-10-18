@@ -4,6 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createApp } from '../server/index.js';
 import { DEFAULT_RULES } from '../server/rules.js';
+import { PREFERENCE_CATEGORIES } from '../server/preference-categories.js';
 
 const output = resolve(process.argv[2] || 'data/qa-agent'); await mkdir(output, { recursive: true });
 const app = await createApp({ dataDir: 'data/qa-agent/db', config: { databaseUrl: '', encryptionKey: '', scheduler: false, appUrl: 'http://localhost:3070', port: 3070 } });
@@ -11,7 +12,7 @@ await new Promise(resolve => app.server.listen(3070, '127.0.0.1', resolve));
 const browser = await chromium.launch({ executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } }); const errors = []; page.on('pageerror', e => errors.push(e.message));
-  const state = { connected: true, configured: true, aiConfigured: true, aiProvider: 'nebius', aiModel: 'nvidia/Nemotron-3.5-Super-VL', schedulerActive: false, csrf: 'fixture-only', email: 'test@example.invalid', rules: { ...DEFAULT_RULES }, runs: [], subscriptions: [], plan: null, totals: {} }; let learned = false; let ran = false;
+  const state = { connected: true, configured: true, aiConfigured: true, aiProvider: 'nebius', aiModel: 'nvidia/Nemotron-3.5-Super-VL', schedulerActive: false, preferenceCategories: PREFERENCE_CATEGORIES, csrf: 'fixture-only', email: 'test@example.invalid', rules: { ...DEFAULT_RULES }, runs: [], subscriptions: [], plan: null, totals: {} }; let learned = false; let ran = false;
   const tray = { questions: [], memories: [], discovery: null, questionsTotal: 0 };
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname;
@@ -25,7 +26,7 @@ try {
     else if (path === '/api/agent/questions') json = tray;
     else if (path === '/api/agent/learn') {
       assert.equal(route.request().postDataJSON().consent, true); learned = true; json = { inspected: 40, summary: 'Your inbox includes job opportunities.', suggestions: [{ topic: 'jobs', note: 'Would you like to keep recruiting emails?' }] };
-      tray.discovery = json; tray.questionsTotal = 1; tray.questions = [{ id: 'question-one', version: 1, question: 'Do you want these product announcements?', reason: 'These might be unwanted signup marketing.', scope: { sender: 'offers@example.invalid', listId: 'updates.example.invalid' }, sample: { subject: 'A new product announcement' }, options: [{ id: 'keep', label: 'Always keep this list' }, { id: 'read', label: 'Mark future low-priority mail as read' }, { id: 'later', label: 'Ask me tomorrow' }] }];
+      tray.discovery = json; tray.questionsTotal = 1; tray.questions = [{ id: 'question-one', version: 1, question: 'Do you want product announcements in your inbox?', reason: 'These might be unwanted signup marketing.', scope: { kind: 'category', category: 'product_announcements', label: 'Product announcements' }, sample: { subject: 'A new product announcement' }, options: [{ id: 'keep', label: 'Keep these in my inbox' }, { id: 'read', label: 'Mark future low-priority mail as read' }, { id: 'later', label: 'Ask me tomorrow' }] }];
     }
     else if (path === '/api/agent/questions/answer') {
       const answer = route.request().postDataJSON(); assert.equal(answer.option, 'read');
@@ -61,6 +62,11 @@ try {
   await page.locator('#learned-preferences select').selectOption('keep'); await page.locator('#learned-preferences button[type=submit]').click();
   await page.waitForFunction(() => document.querySelector('#learned-preferences small').textContent.includes('Version 2'));
   assert.equal(tray.memories[0].action, 'keep');
+  await page.locator('#exception-value').fill('apple.com');
+  await page.locator('#exception-category').selectOption('product_announcements'); await page.locator('#exception-action').selectOption('read');
+  await page.locator('#exception-save').click(); await page.waitForSelector('#sender-exceptions [data-remove-exception]');
+  assert.equal(state.rules.agent.exceptionsRules[0].value, 'apple.com'); assert.equal(state.rules.agent.exceptionsRules[0].action, 'read');
+  assert.equal(tray.memories[0].action, 'keep', 'Adding an exception must preserve the general category answer');
   await page.setViewportSize({ width: 1440, height: 1050 }); await page.getByRole('button', { name: 'Overview', exact: true }).click();
   await page.locator('#agent-start').click(); await page.waitForFunction(() => document.querySelector('#agent-stage').textContent === 'Run finished.');
   assert.equal(ran, true); assert.equal(await page.locator('#agent-decisions script').count(), 0);

@@ -83,7 +83,7 @@ try {
   assert.ok(messages.get('one').labelIds.includes('UNREAD'));
   console.log('PASS autonomous agent decisions, durable assessment records, and undo on real Neon (Gmail and AI test adapters)');
   const beforeAnswerWrites = writes;
-  const question = await askPreference(first.service, owner, messages.get('one'), (await first.service.account(owner)).rules.agent, { question: 'Do you want mail from this sender?', reason: 'Test-only uncertainty.' });
+  const question = await askPreference(first.service, owner, messages.get('one'), (await first.service.account(owner)).rules.agent, { category: 'product_announcements', question: 'Do you want product announcements?', reason: 'Test-only uncertainty.' });
   const tray = await call(second, '/api/agent/questions');
   assert.equal(tray.body.questions[0].id, question.id);
   assert.equal((await call(second, '/api/agent/questions', undefined, otherToken)).body.questions.length, 0);
