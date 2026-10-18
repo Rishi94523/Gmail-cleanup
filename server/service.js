@@ -5,6 +5,7 @@ import { gmailClient, metadata, mapLimit, classify } from './gmail.js';
 import { unsubscribeUrl, postUnsubscribe } from './security.js';
 import { preferences, runAgent } from './agent.js';
 import { missingAIKey } from './ai.js';
+import { choicesFor } from './learning.js';
 
 export class InboxService {
   constructor(store, crypto, config, clientFactory = gmailClient) { this.store = store; this.crypto = crypto; this.config = config; this.clientFactory = clientFactory; }
@@ -38,6 +39,14 @@ export class InboxService {
     await this.store.transaction(async tx => {
       await tx.run('UPDATE accounts SET rules=? WHERE id=?', JSON.stringify(rules), id);
       await tx.run("UPDATE plans SET status='expired' WHERE account_id=? AND status='ready'", id);
+      // Discovery may precede the final read/archive selection. Keep unanswered
+      // setup choices aligned with that permission before showing the questions.
+      for (const question of await tx.all("SELECT id,payload FROM agent_questions WHERE account_id=? AND status='pending'", id)) {
+        const payload = this.crypto.open(question.payload);
+        if (!payload.initial) continue;
+        const options = choicesFor(preferences(rules.agent), payload.scope).map(o => ({ ...o, label: o.label.replace('future low-priority mail', 'low-priority emails in this first cleanup') }));
+        if (JSON.stringify(payload.options) !== JSON.stringify(options)) await tx.run('UPDATE agent_questions SET payload=?,version=version+1,updated=? WHERE id=? AND account_id=?', this.crypto.seal({ ...payload, options }), Date.now(), question.id, id);
+      }
     });
     return rules;
   }
