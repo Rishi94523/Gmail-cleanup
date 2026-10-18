@@ -28,7 +28,7 @@ export async function categoryContext(service, id) {
 export async function holdEmail(service, id, messageId, scope, questionId = null) {
   await service.store.run('INSERT INTO agent_holds(account_id,message_id,scope_hash,question_id,created) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING', id, messageId, scope.scopeHash, questionId, Date.now());
 }
-export async function askPreference(service, id, message, p, args) {
+export async function askPreference(service, id, message, p, args, { initial = false } = {}) {
   if (!args || !categoryScope(args.category) || typeof args.question !== 'string' || !args.question.trim() || args.question.length > 240 || typeof args.reason !== 'string' || args.reason.length > 400 || Object.keys(args).some(k => !['category','question','reason'].includes(k))) throw new Error('Invalid preference question. Email was left unchanged.');
   const scope = categoryScope(args.category); const now = Date.now();
   const result = await service.store.transaction(async tx => {
@@ -37,12 +37,12 @@ export async function askPreference(service, id, message, p, args) {
     const memory = await tx.get('SELECT id FROM preference_memories WHERE account_id=? AND scope_hash=?', id, scope.scopeHash);
     if (memory) return { id: old?.id || null, status: 'already_learned' };
     const questionId = old?.id || randomUUID();
-    const payload = service.crypto.seal({ question: PREFERENCE_CATEGORIES[args.category].question, reason: args.reason, scope, options: choicesFor(p, scope), sample: { subject: headersOf(message).subject || '(No subject)' } });
+    const payload = service.crypto.seal({ question: PREFERENCE_CATEGORIES[args.category].question, reason: args.reason, scope, initial, options: choicesFor(p, scope).map(o => initial ? { ...o, label: o.label.replace('future low-priority mail', 'low-priority emails in this first cleanup') } : o), sample: { subject: headersOf(message).subject || '(No subject)' } });
     if (old) await tx.run("UPDATE agent_questions SET payload=?,status='pending',version=version+1,updated=?,deferred_at=?,snoozed_until=0 WHERE id=? AND account_id=?", payload, now, now + 30000, questionId, id);
     else await tx.run("INSERT INTO agent_questions(id,account_id,scope_hash,payload,status,created,updated,deferred_at) VALUES(?,?,?,?,'pending',?,?,?)", questionId, id, scope.scopeHash, payload, now, now, now + 30000);
     return { id: questionId, status: 'pending' };
   });
-  await holdEmail(service, id, message.id, scope, result.id);
+  if (!initial) await holdEmail(service, id, message.id, scope, result.id);
   return { tool: 'ask_preference', ...result, outcome: 'email_held', waitsForUser: false };
 }
 export async function learningTray(service, id) {
@@ -66,10 +66,14 @@ export async function answerPreference(service, id, input) {
       return { status: 'snoozed' };
     }
     const memory = { scope: question.scope, action: input.option, sourceQuestion: row.id, explanation: question.question, applies: 'future_messages_only', effectiveFrom: Date.now() };
+    if (question.initial) {
+      const sample = await tx.get('SELECT payload FROM trial_samples WHERE account_id=?', id);
+      if (sample) { memory.initialSampleIds = service.crypto.open(sample.payload).ids; memory.applies = 'initial_sample_and_future_messages'; }
+    }
     await tx.run('INSERT INTO preference_memories(id,account_id,scope_hash,payload,updated) VALUES(?,?,?,?,?) ON CONFLICT(account_id,scope_hash) DO UPDATE SET payload=excluded.payload,version=preference_memories.version+1,updated=excluded.updated', randomUUID(), id, row.scope_hash, service.crypto.seal(memory), Date.now());
     await tx.run("UPDATE agent_questions SET status='answered',version=version+1,updated=? WHERE id=? AND account_id=?", Date.now(), row.id, id);
     await recordEvent(tx, service, id, { kind: 'answer', questionId: row.id, memory });
-    return { status: 'saved', applies: 'future_messages_only' };
+    return { status: 'saved', applies: memory.applies };
   }));
 }
 export async function editMemory(service, id, input) {

@@ -12,12 +12,12 @@ await new Promise(resolve => app.server.listen(3070, '127.0.0.1', resolve));
 const browser = await chromium.launch({ executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } }); const errors = []; page.on('pageerror', e => errors.push(e.message));
-  const state = { connected: true, configured: true, aiConfigured: true, aiProvider: 'nebius', aiModel: 'nvidia/Nemotron-3.5-Super-VL', schedulerActive: false, preferenceCategories: PREFERENCE_CATEGORIES, csrf: 'fixture-only', email: 'test@example.invalid', rules: { ...DEFAULT_RULES }, runs: [], subscriptions: [], plan: null, totals: {} }; let learned = false; let ran = false;
+  const state = { connected: true, configured: true, aiConfigured: true, aiProvider: 'nebius', aiModel: 'nvidia/Nemotron-3.5-Super-VL', schedulerActive: false, preferenceCategories: PREFERENCE_CATEGORIES, access: { tier: 'free', used: 0, remaining: 100, dailyAllowed: false }, csrf: 'fixture-only', email: 'test@example.invalid', rules: { ...DEFAULT_RULES }, runs: [], subscriptions: [], plan: null, totals: {} }; let learned = false; let ran = false;
   const tray = { questions: [], memories: [], discovery: null, questionsTotal: 0 };
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/agent/run') {
-      ran = true; assert.deepEqual(route.request().postDataJSON(), { authorize: true });
+      ran = true; state.access.used = 100; state.access.remaining = 0; assert.deepEqual(route.request().postDataJSON(), { authorize: true });
       return route.fulfill({ contentType: 'application/x-ndjson', body: [{ type: 'stage', message: 'Reading and deciding', total: 2 }, { type: 'decision', action: 'read', subject: '<script>bad()</script> sale', reason: 'Not relevant to your interests', inspected: 1, total: 2, changed: 1, kept: 0 }, { type: 'decision', action: 'keep', subject: 'Interview next week', reason: 'Job opportunity', inspected: 2, total: 2, changed: 1, kept: 1 }, { type: 'complete', inspected: 2, changed: 1, kept: 1 }].map(e => JSON.stringify(e)).join('\n') + '\n' });
     }
     let json;
@@ -25,7 +25,7 @@ try {
     else if (path === '/api/mailbox') json = { unread: 7590, messages: 7626 };
     else if (path === '/api/agent/questions') json = tray;
     else if (path === '/api/agent/learn') {
-      assert.equal(route.request().postDataJSON().consent, true); learned = true; json = { inspected: 40, summary: 'Your inbox includes job opportunities.', suggestions: [{ topic: 'jobs', note: 'Would you like to keep recruiting emails?' }] };
+      assert.equal(route.request().postDataJSON().consent, true); learned = true; json = { inspected: 100, summary: 'Your inbox includes job opportunities.', suggestions: [{ topic: 'jobs', note: 'Would you like to keep recruiting emails?' }] };
       tray.discovery = json; tray.questionsTotal = 1; tray.questions = [{ id: 'question-one', version: 1, question: 'Do you want product announcements in your inbox?', reason: 'These might be unwanted signup marketing.', scope: { kind: 'category', category: 'product_announcements', label: 'Product announcements' }, sample: { subject: 'A new product announcement' }, options: [{ id: 'keep', label: 'Keep these in my inbox' }, { id: 'read', label: 'Mark future low-priority mail as read' }, { id: 'later', label: 'Ask me tomorrow' }] }];
     }
     else if (path === '/api/agent/questions/answer') {
@@ -42,10 +42,11 @@ try {
   assert.equal(await page.locator('#agent-start').isDisabled(), true);
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();
   assert.equal(await page.locator('#agent-learn').isDisabled(), true);
-  await page.locator('#agent-consent').check(); await page.waitForFunction(() => document.querySelector('#agent-suggestions').textContent.includes('40 messages'));
+  await page.locator('#agent-consent').check(); await page.waitForFunction(() => document.querySelector('#agent-suggestions').textContent.includes('100 messages'));
   assert.equal(learned, true); assert.equal(ran, false);
   await page.locator('#pref-interests').fill('Software engineering roles');
-  await page.locator('#save-preferences').click(); await page.waitForSelector('#page-overview:not([hidden])');
+  await page.locator('#save-preferences').click(); await page.waitForSelector('#page-questions:not([hidden])');
+  assert.equal(await page.locator('#pref-daily').isDisabled(), true);
   assert.equal(state.rules.agent.action, 'read'); assert.equal(state.rules.agent.enabled, true); assert.equal(state.rules.daily, false);
   assert.equal(state.rules.agent.consentProvider, 'nebius');
   assert.equal(await page.locator('#question-count').textContent(), '1');
@@ -69,6 +70,7 @@ try {
   assert.equal(tray.memories[0].action, 'keep', 'Adding an exception must preserve the general category answer');
   await page.setViewportSize({ width: 1440, height: 1050 }); await page.getByRole('button', { name: 'Overview', exact: true }).click();
   await page.locator('#agent-start').click(); await page.waitForFunction(() => document.querySelector('#agent-stage').textContent === 'Run finished.');
+  await page.waitForFunction(() => document.querySelector('#agent-start').disabled);
   assert.equal(ran, true); assert.equal(await page.locator('#agent-decisions script').count(), 0);
   assert.ok((await page.locator('#agent-counts').textContent()).includes('1 changed'));
   await page.evaluate(() => { document.querySelector('#toast').hidden = true; });
@@ -87,5 +89,5 @@ try {
   assert.equal(await page.locator('#agent-consent').isChecked(), false);
   assert.equal(await page.locator('#agent-start').isDisabled(), true);
   assert.deepEqual(errors, []);
-  console.log('PASS automatic discovery after consent, persistent MCQ tray, answering and editing learned preferences, desktop/mobile layout, provider consent, and streamed decisions. Gmail and AI were test fixtures; no live email actions.');
+  console.log('PASS automatic discovery after consent, persistent MCQ tray, answering and editing learned preferences, desktop/mobile layout, provider consent, paid-only daily controls, exhaustion controls, and streamed decisions. Gmail and AI were test fixtures; no live email actions.');
 } finally { await browser.close(); await app.close(); }

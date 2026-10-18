@@ -34,6 +34,17 @@ function fixture(t) {
   return { id, store, crypto, rules, messages, service: new InboxService(store, crypto, { aiKey: 'fixture-only', aiProvider: 'openrouter' }, () => gmail), writes: () => writes };
 }
 const args = { category: 'product_announcements', question: 'Do you want updates from this product?', reason: 'Your subscription intent is unclear.' };
+
+test('initial setup answers authorize the saved sample without releasing later held mail', async t => {
+  const f = fixture(t);
+  f.messages.get('one').internalDate = '1'; f.messages.get('two').internalDate = '1';
+  f.store.run('INSERT INTO trial_samples(account_id,payload) VALUES(?,?)', f.id, f.crypto.seal({ ids: ['one', 'two'] }));
+  const question = await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args, { initial: true });
+  assert.equal(f.store.get('SELECT count(*) AS n FROM agent_holds').n, 0);
+  await answerPreference(f.service, f.id, { questionId: question.id, version: 1, option: 'read' });
+  const result = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', async () => ({ action: 'read', confidence: .99, reason: 'Approved product category', preferenceCategory: 'product_announcements', categoryConfidence: .99 })));
+  assert.equal(result.changed, 2);
+});
 test('brand-specific wording is normalized into one broad question across different senders', async t => {
   const f = fixture(t); const apple = mail('apple'); apple.payload.headers.find(h => h.name === 'From').value = 'news@apple.com';
   const a = await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);

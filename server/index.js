@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { openPostgresStore } from './postgres-store.js';
@@ -11,10 +11,13 @@ import { jsonFetch } from './gmail.js';
 import { learnInbox, runAgent } from './agent.js';
 import { aiConfig } from './ai.js';
 import { learningTray, answerPreference, editMemory } from './learning.js';
+import { accessFor, requirePaid } from './access.js';
 import { PREFERENCE_CATEGORIES } from './preference-categories.js';
 
 export async function createApp(options = {}) {
   const config = { port: Number(process.env.PORT || 3000), host: process.env.HOST || '127.0.0.1', appUrl: process.env.APP_URL || 'http://localhost:3000', clientId: process.env.GOOGLE_CLIENT_ID || '', clientSecret: process.env.GOOGLE_CLIENT_SECRET || '', encryptionKey: process.env.TOKEN_ENCRYPTION_KEY || '', ...aiConfig(), databaseUrl: process.env.DATABASE_URL || '', scheduler: !process.env.K_SERVICE && process.env.ENABLE_LOCAL_SCHEDULER !== 'false', ...options.config };
+  config.serveLanding ??= process.env.SERVE_LANDING === 'true' || Boolean(process.env.K_SERVICE);
+  const workspace = config.serveLanding ? '/app' : '/';
   const origin = new URL(config.appUrl).origin;
   if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(origin).hostname) && !origin.startsWith('https://')) throw new Error('APP_URL must use HTTPS outside localhost.');
   if (process.env.K_SERVICE && !config.databaseUrl && !options.store) throw new Error('Cloud Run requires a shared Postgres DATABASE_URL. SQLite is local-only.');
@@ -48,7 +51,7 @@ export async function createApp(options = {}) {
       if (req.headers.host !== new URL(origin).host) return json(res, 403, { error: `Open the app at ${origin}.` });
       url = new URL(req.url, origin);
       if (url.pathname === '/api/health' && req.method === 'GET') {
-        try { await store.get('SELECT 1 AS connected'); return json(res, 200, { database: store.kind, connected: true, gmailConfigured: ready }); }
+        try { await store.get('SELECT 1 AS connected'); return json(res, 200, { database: store.kind, connected: true, gmailConfigured: ready, aiConfigured: Boolean(config.aiKey), stage: 'gmail-agent', freeEmailLimit: 100 }); }
         catch { return json(res, 503, { database: store.kind, connected: false }); }
       }
       const token = req.headers.cookie?.split(';').map(p => p.trim()).find(p => p.startsWith('inboxclean_session='))?.slice(19);
@@ -63,10 +66,10 @@ export async function createApp(options = {}) {
           store.all('SELECT sender,host,status FROM subscriptions WHERE account_id=? ORDER BY sender LIMIT 200', account.id),
           service ? service.latestPlan(account.id) : null
         ]) : null;
-        return json(res, 200, { csrf: session.csrf, configured: ready, aiConfigured: Boolean(config.aiKey), aiProvider: config.aiProvider, aiModel: config.aiModel, preferenceCategories: PREFERENCE_CATEGORIES, schedulerActive: Boolean(config.scheduler), connected: Boolean(account), email: account?.email || null, rules: account ? JSON.parse(account.rules) : DEFAULT_RULES, lastDay: account?.last_day || null, lastError: account?.last_error || null, totals: details ? { cleaned: details[0].total, requested: details[1].total } : null, setupMissing: [!config.clientId && 'GOOGLE_CLIENT_ID', !config.clientSecret && 'GOOGLE_CLIENT_SECRET', !crypto && 'TOKEN_ENCRYPTION_KEY'].filter(Boolean), plan: details?.[4] || null, runs: details ? details[2].map(run => ({ ...run, undoable: Boolean(run.undoable) })) : [], subscriptions: details?.[3] || [] });
+        return json(res, 200, { csrf: session.csrf, configured: ready, aiConfigured: Boolean(config.aiKey), aiProvider: config.aiProvider, aiModel: config.aiModel, preferenceCategories: PREFERENCE_CATEGORIES, schedulerActive: Boolean(config.scheduler), connected: Boolean(account), email: account?.email || null, access: account ? await accessFor(service, account.id) : null, rules: account ? JSON.parse(account.rules) : DEFAULT_RULES, lastDay: account?.last_day || null, lastError: account?.last_error || null, totals: details ? { cleaned: details[0].total, requested: details[1].total } : null, setupMissing: [!config.clientId && 'GOOGLE_CLIENT_ID', !config.clientSecret && 'GOOGLE_CLIENT_SECRET', !crypto && 'TOKEN_ENCRYPTION_KEY'].filter(Boolean), plan: details?.[4] || null, runs: details ? details[2].map(run => ({ ...run, undoable: Boolean(run.undoable) })) : [], subscriptions: details?.[3] || [] });
       }
       if (url.pathname === '/auth/google' && req.method === 'GET') {
-        if (!ready) return redirect(res, '/?auth=setup');
+        if (!ready) return redirect(res, `${workspace}?auth=setup`);
         if (req.headers['sec-fetch-site'] && !['same-origin', 'none'].includes(req.headers['sec-fetch-site'])) return json(res, 403, { error: 'Start connection from this app.' });
         if (!session) session = await newSession(res);
         const state = randomToken(); const verifier = randomToken();
@@ -75,10 +78,10 @@ export async function createApp(options = {}) {
         return redirect(res, `https://accounts.google.com/o/oauth2/v2/auth?${parameters}`);
       }
       if (url.pathname === '/auth/google/callback' && req.method === 'GET') {
-        if (!ready) return redirect(res, '/?auth=setup');
+        if (!ready) return redirect(res, `${workspace}?auth=setup`);
         const state = await store.get('DELETE FROM oauth_states WHERE id=? AND session_id=? AND expires>? RETURNING *', hash(url.searchParams.get('state') || ''), session?.id || '', Date.now());
-        if (!state) return redirect(res, '/?auth=state');
-        if (url.searchParams.has('error') || !url.searchParams.get('code')) return redirect(res, '/?auth=cancelled');
+        if (!state) return redirect(res, `${workspace}?auth=state`);
+        if (url.searchParams.has('error') || !url.searchParams.get('code')) return redirect(res, `${workspace}?auth=cancelled`);
         try {
           const tokens = await jsonFetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: config.clientId, client_secret: config.clientSecret, redirect_uri: `${origin}/auth/google/callback`, grant_type: 'authorization_code', code: url.searchParams.get('code'), code_verifier: crypto.open(state.verifier) }) });
           if (!tokens.scope?.split(' ').includes('https://www.googleapis.com/auth/gmail.modify')) throw new Error('Gmail permission was not granted.');
@@ -91,8 +94,8 @@ export async function createApp(options = {}) {
           tokens.expires_at = Date.now() + tokens.expires_in * 1000;
           await store.run('INSERT INTO accounts(id,email,tokens,rules,created) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET tokens=excluded.tokens,last_error=NULL', accountId, profile.emailAddress, crypto.seal(tokens), JSON.stringify(DEFAULT_RULES), Date.now());
           await store.run('DELETE FROM sessions WHERE id=?', session.id); await newSession(res, accountId);
-          return redirect(res, '/?auth=connected');
-        } catch { return redirect(res, '/?auth=failed'); }
+          return redirect(res, `${workspace}?auth=connected`);
+        } catch { return redirect(res, `${workspace}?auth=failed`); }
       }
       if (url.pathname.startsWith('/api/')) {
         if (!session?.account_id || !service) return json(res, 401, { error: 'Connect Gmail to continue.' });
@@ -124,6 +127,7 @@ export async function createApp(options = {}) {
           return;
         }
         if (url.pathname === '/api/rules') return json(res, 200, { rules: await service.saveRules(id, input) });
+        if (['/api/scan', '/api/discover', '/api/apply', '/api/unsubscribe'].includes(url.pathname)) await requirePaid(service, id);
         if (url.pathname === '/api/scan') return json(res, 200, { plan: await service.scan(id, 'manual', typeof input.nextPlanId === 'string' ? input.nextPlanId : null) });
         if (url.pathname === '/api/discover') return json(res, 200, await service.discover(id));
         if (url.pathname === '/api/apply') return json(res, 200, await service.apply(id, input.planId, input.ids));
@@ -138,12 +142,23 @@ export async function createApp(options = {}) {
           const revoked = await fetch('https://oauth2.googleapis.com/revoke', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: account.tokens.refresh_token }), signal: AbortSignal.timeout(15000) });
           if (!revoked.ok) throw new Error('Agent paused, but Google revocation failed. Try disconnecting again or remove app access from your Google account.');
           await store.transaction(async tx => {
-            for (const table of ['changes', 'plans', 'runs', 'subscriptions', 'agent_assessments', 'agent_questions', 'preference_memories', 'preference_events', 'agent_holds', 'subscription_actions', 'agent_discoveries']) await tx.run(`DELETE FROM ${table} WHERE account_id=?`, id);
+            for (const table of ['changes', 'plans', 'runs', 'subscriptions', 'agent_assessments', 'agent_questions', 'preference_memories', 'preference_events', 'agent_holds', 'subscription_actions', 'agent_discoveries', 'trial_samples']) await tx.run(`DELETE FROM ${table} WHERE account_id=?`, id);
             await tx.run('DELETE FROM sessions WHERE account_id=?', id); await tx.run('DELETE FROM accounts WHERE id=?', id);
           });
           res.setHeader('Set-Cookie', cookie('', 0)); return { success: true };
         }));
         return json(res, 404, { error: 'Not found.' });
+      }
+      if (req.method === 'GET' && config.serveLanding && (url.pathname === '/' || url.pathname.startsWith('/assets/'))) {
+        const landingRoot = resolve(root, '../web/dist');
+        const file = resolve(landingRoot, url.pathname === '/' ? 'index.html' : `.${decodeURIComponent(url.pathname)}`);
+        if (!file.startsWith(`${landingRoot}${sep}`)) return json(res, 404, { error: 'Not found.' });
+        const type = file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.html') ? 'text/html' : null;
+        if (!type) return json(res, 404, { error: 'Not found.' });
+        const content = await readFile(file); res.writeHead(200, { 'Content-Type': `${type}; charset=utf-8` }); return res.end(content);
+      }
+      if (req.method === 'GET' && url.pathname === '/app') {
+        const content = await readFile(resolve(root, 'index.html')); res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(content);
       }
       if (req.method === 'GET' && assets.has(url.pathname)) {
         const [file, type] = assets.get(url.pathname); const content = await readFile(resolve(root, file));

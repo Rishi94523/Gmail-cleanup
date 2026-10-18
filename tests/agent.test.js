@@ -9,6 +9,7 @@ import { encryption } from '../server/security.js';
 import { InboxService } from '../server/service.js';
 import { DEFAULT_RULES } from '../server/rules.js';
 import { DEFAULT_PREFERENCES, preferences, decisionFor, emailText, runAgent } from '../server/agent.js';
+import { accessFor } from '../server/access.js';
 
 function fixture(t, patch = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'inboxclean-agent-')); const store = openStore(dir); const crypto = encryption(randomBytes(32).toString('base64'));
@@ -74,4 +75,38 @@ test('switching AI providers requires fresh consent before any agent mail access
   await assert.rejects(f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', f.infer)), /provider changed/);
   assert.equal(f.writes.length, 0);
   await assert.rejects(f.service.saveRules(f.id, f.rules), /selected provider/);
+});
+
+test('free cleanup is capped at 100 across reloads, preference changes, and undo', async t => {
+  const f = fixture(t, { keepPeople: false });
+  const original = f.mails.get('noise'); f.mails.clear();
+  for (let i = 0; i < 250; i++) f.mails.set(`mail-${i}`, { ...structuredClone(original), id: `mail-${i}` });
+  let calls = 0;
+  const infer = async () => { calls++; return { action: 'read', confidence: .99, reason: 'Unwanted promotion' }; };
+  const result = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', infer));
+  assert.equal(result.inspected, 100); assert.equal(calls, 100); assert.equal(f.writes.length, 100);
+  assert.ok(f.mails.get('mail-100').labelIds.includes('UNREAD'));
+  assert.equal((await accessFor(f.service, f.id)).remaining, 0);
+  await f.service.undo(f.id, result.runId);
+  await f.service.saveRules(f.id, { ...f.rules, agent: { ...f.rules.agent, interests: 'Changed' } });
+  await assert.rejects(f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', infer)), /free 100-email cleanup is complete/);
+  assert.equal(calls, 100);
+});
+
+test('free users cannot enable or invoke daily runs, including forged saved rules', async t => {
+  const f = fixture(t);
+  await assert.rejects(f.service.saveRules(f.id, { ...f.rules, daily: true }), /paid plan/);
+  await assert.rejects(f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'daily', f.infer)), /paid plan/);
+  f.store.run('UPDATE accounts SET rules=? WHERE id=?', JSON.stringify({ ...f.rules, daily: true, hour: 0, timezone: 'UTC' }), f.id);
+  await f.service.daily();
+  assert.equal(f.writes.length, 0); assert.equal(f.store.get('SELECT count(*) AS n FROM runs').n, 0);
+});
+
+test('free cleanup uses the same saved sample when newer emails arrive', async t => {
+  const f = fixture(t);
+  const { trialSample } = await import('../server/access.js');
+  const first = await trialSample(f.service, f.id, f.service.client(await f.service.account(f.id)));
+  f.mails.set('later', { ...structuredClone(f.mails.get('noise')), id: 'later' });
+  const next = await trialSample(f.service, f.id, f.service.client(await f.service.account(f.id)));
+  assert.deepEqual(next.ids, first.ids); assert.ok(!next.ids.includes('later'));
 });

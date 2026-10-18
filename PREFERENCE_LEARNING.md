@@ -55,3 +55,9 @@ One-message new signup promotions therefore usually generate a question first. C
 Official references: [Nebius tool calling](https://docs.tokenfactory.nebius.com/ai-models-inference/function-calling), [Google sender guidelines FAQ](https://support.google.com/mail/answer/14229414?hl=en).
 
 Cloud Scheduler/Cloud Tasks execution, live model quality and tool-call compatibility, and production-scale validation remain separate unfinished work. Current automated checks use simulated AI/Gmail/unsubscribe responses, with real Neon used for persistence and HTTP account-isolation checks.
+
+## First free cleanup
+
+Discovery and cleanup share one encrypted sample of up to 100 unread inbox emails. Questions created during initial discovery, before any trial emails have been processed, are explicitly marked as setup questions. Their answers apply to that saved sample and future arrivals. Questions raised during cleanup still hold the current emails; later answers never release those held messages. Editing a learned preference does not release a hold.
+
+Nebius Nemotron authenticated JSON responses and native `ask_preference` tool calls passed synthetic live checks on October 18, 2026. Model decision quality and live unsubscribe outcomes remain unvalidated.

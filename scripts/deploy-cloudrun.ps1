@@ -19,7 +19,7 @@ $billingJson = & gcloud.cmd billing projects describe $ProjectId --format=json
 if ($LASTEXITCODE -ne 0) { throw 'Could not verify project billing. Sign in and check project access.' }
 $billing = $billingJson | ConvertFrom-Json
 if (-not $billing.billingEnabled) { throw 'Link an active billing account to the selected project before deploying.' }
-Invoke-Gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com --project=$ProjectId
+Invoke-Gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com --project=$ProjectId
 $repository = & gcloud.cmd artifacts repositories list --location=$Region --project=$ProjectId --filter='name:repositories/gmail-cleanup' --format='value(name)'
 if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the image repository.' }
 if (-not $repository) { Invoke-Gcloud artifacts repositories create gmail-cleanup --repository-format=docker --location=$Region --project=$ProjectId --description='Gmail-cleanup application images' }
@@ -43,10 +43,18 @@ Invoke-Gcloud projects add-iam-policy-binding $ProjectId --member="serviceAccoun
 $imageTag = Get-Date -AsUTC -Format 'yyyyMMdd-HHmmss'
 Invoke-Gcloud builds submit . --config=deploy/cloudbuild.yaml --project=$ProjectId --service-account="projects/$ProjectId/serviceAccounts/$buildAccount" --gcs-source-staging-dir="gs://$sourceBucket/source" "--substitutions=_REGION=$Region,_IMAGE_TAG=$imageTag"
 $image = "${Region}-docker.pkg.dev/${ProjectId}/gmail-cleanup/web:${imageTag}"
-Invoke-Gcloud run deploy gmail-cleanup-web --image=$image --project=$ProjectId --region=$Region --service-account=$runtimeAccount --allow-unauthenticated --port=8080 --cpu=1 --memory=512Mi --min-instances=0 --max-instances=2 --concurrency=80 --timeout=60s --cpu-throttling
+& node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/deploy-secrets.mjs $ProjectId
+if ($LASTEXITCODE -ne 0) { throw 'Runtime secrets could not be configured. The existing service was not replaced.' }
+$bindings = Get-Content -LiteralPath data/cloud-run-bindings.json -Raw | ConvertFrom-Json
+$projectNumber = & gcloud.cmd projects describe $ProjectId --format='value(projectNumber)'
+if ($LASTEXITCODE -ne 0) { throw 'Could not resolve project number.' }
+$appUrl = "https://gmail-cleanup-web-${projectNumber}.${Region}.run.app"
+$environment = "APP_URL=$appUrl,HOST=0.0.0.0,SERVE_LANDING=true,ENABLE_LOCAL_SCHEDULER=false,AI_PROVIDER=$($bindings.provider)"
+if ($bindings.provider -eq 'nebius') { $environment += ",NEBIUS_MODEL=$($bindings.model)" } else { $environment += ",OPENROUTER_MODEL=$($bindings.model)" }
+Invoke-Gcloud run deploy gmail-cleanup-web --image=$image --project=$ProjectId --region=$Region --service-account=$runtimeAccount --allow-unauthenticated --port=8080 --cpu=1 --memory=512Mi --min-instances=0 --max-instances=2 --concurrency=8 --timeout=3600s --cpu-throttling "--set-env-vars=$environment" "--set-secrets=$($bindings.secrets)"
 $siteUrl = & gcloud.cmd run services describe gmail-cleanup-web --project=$ProjectId --region=$Region --format='value(status.url)'
 if ($LASTEXITCODE -ne 0 -or -not $siteUrl) { throw 'Deployment returned no service URL. Inspect Cloud Run status before retrying.' }
-$health = Invoke-RestMethod -Uri "$siteUrl/api/health" -TimeoutSec 60
-if ($health.stage -ne 'public-product-preview' -or $health.gmailEnabled -ne $false) { throw 'Unexpected deployment health response.' }
-Write-Output "Verified public product preview: $siteUrl"
-Write-Output 'This release does not enable live Gmail or daily processing. Cloud Run, build, and image storage usage may incur charges.'
+$health = Invoke-RestMethod -Uri "$appUrl/api/health" -TimeoutSec 60
+if ($health.stage -ne 'gmail-agent' -or -not $health.gmailConfigured -or -not $health.aiConfigured -or -not $health.connected) { throw 'Unexpected deployment health response.' }
+Write-Output "Verified Gmail agent and Neon database: $appUrl/app"
+Write-Output 'Free cleanup is limited to 100 emails. Daily jobs remain disabled; paid checkout is not enabled.'

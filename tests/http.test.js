@@ -8,9 +8,9 @@ import { request } from 'node:http';
 import { createApp } from '../server/index.js';
 import { DEFAULT_RULES } from '../server/rules.js';
 
-async function setup(t, configured = false) {
+async function setup(t, configured = false, config = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'inboxclean-http-'));
-  const app = await createApp({ dataDir: directory, config: { databaseUrl: '', appUrl: 'http://localhost:3000', encryptionKey: configured ? randomBytes(32).toString('base64') : '', clientId: configured ? 'fixture-client' : '', clientSecret: configured ? 'fixture-secret' : '' } });
+  const app = await createApp({ dataDir: directory, config: { databaseUrl: '', appUrl: 'http://localhost:3000', encryptionKey: configured ? randomBytes(32).toString('base64') : '', clientId: configured ? 'fixture-client' : '', clientSecret: configured ? 'fixture-secret' : '', ...config } });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${app.server.address().port}`;
   t.after(async () => { await app.close(); rmSync(directory, { recursive: true, force: true }); });
@@ -49,4 +49,23 @@ test('session cookies resolve, write routes reject cross-origin or missing CSRF,
   assert.equal((await post({ Origin: 'http://localhost:3000' })).status, 403);
   assert.equal((await post({ Origin: 'http://localhost:3000', 'X-CSRF-Token': data.csrf })).status, 200);
   assert.equal((await call('/api/disconnect', { headers: { Cookie: cookie } })).status, 405);
+});
+
+test('production routing serves landing and dashboard together and protects free additional-cleanup endpoints', async t => {
+  const { call, app } = await setup(t, true, { serveLanding: true });
+  assert.match(await (await call('/')).text(), /\/assets\/index-/);
+  assert.match(await (await call('/app')).text(), /A little less inbox/);
+  const status = await call('/api/status'); const cookie = status.headers.get('set-cookie').split(';')[0]; const first = await status.json();
+  const callback = await call('/auth/google/callback?state=forged&code=fake', { headers: { Cookie: cookie } });
+  assert.equal(callback.headers.get('location'), '/app?auth=state');
+  const id = 'free@example.invalid';
+  app.store.run('INSERT INTO accounts(id,email,tokens,rules,created) VALUES(?,?,?,?,?)', id, id, app.service.crypto.seal({}), JSON.stringify(DEFAULT_RULES), Date.now());
+  app.store.run('UPDATE sessions SET account_id=?', id);
+  const state = await (await call('/api/status', { headers: { Cookie: cookie } })).json();
+  assert.equal(state.access.remaining, 100); assert.equal(state.access.dailyAllowed, false);
+  for (const path of ['/api/scan', '/api/discover', '/api/apply', '/api/unsubscribe']) {
+    const response = await call(path, { method: 'POST', headers: { Cookie: cookie, Origin: 'http://localhost:3000', 'X-CSRF-Token': first.csrf, 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(response.status, 400); assert.match((await response.json()).error, /paid plan/);
+  }
+  assert.equal(app.store.get('SELECT count(*) AS n FROM runs').n, 0);
 });

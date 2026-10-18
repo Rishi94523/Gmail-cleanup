@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { openStore } from '../server/store.js';
 import { encryption } from '../server/security.js';
 import { DEFAULT_RULES } from '../server/rules.js';
@@ -68,7 +68,9 @@ test('ambiguous provider writes are recorded, never replayed, and can be reconci
   f.failWrites(false); await f.service.undo(f.accountId, run.id); assert.ok(f.messages.get('one').labelIds.includes('UNREAD'));
 });
 test('daily agent runs once per account-local day and only after explicit enabling', async t => {
-  const f = fixture(t); await f.service.daily(); assert.equal(f.writes.length, 0);
+  const f = fixture(t);
+  f.store.run("INSERT INTO account_access(account_key,tier) VALUES(?,'paid')", createHash('sha256').update(f.accountId).digest('hex'));
+  await f.service.daily(); assert.equal(f.writes.length, 0);
   await f.service.saveRules(f.accountId, { ...DEFAULT_RULES, daily: true, hour: 0, timezone: 'UTC' });
   await f.service.daily(); assert.equal(f.writes.length, 2);
   await f.service.daily(); assert.equal(f.writes.length, 2);

@@ -1,3 +1,4 @@
+import { accessFor, requirePaid, trialSample, reserveDiscovery, reserveFreeEmail } from './access.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { headersOf, senderAddress } from './rules.js';
 import { chatJSON, missingAIKey } from './ai.js';
@@ -68,9 +69,17 @@ export async function learnInbox(service, id, consent, provider) {
   if (provider !== (service.config.aiProvider || 'openrouter')) throw new Error('AI provider changed. Reload Preferences and confirm AI processing again.');
   const account = await service.account(id); const gmail = service.client(account);
   if (!service.config.aiKey) throw new Error(missingAIKey(service.config));
+  const access = await accessFor(service, id);
   const cached = await service.store.get('SELECT payload FROM agent_discoveries WHERE account_id=? AND provider=? AND model=?', id, provider, discoveryModelKey(service.config.aiModel));
   if (cached) return service.crypto.open(cached.payload);
-  const list = await gmail('messages?maxResults=40&q=in%3Ainbox');
+  if (access.tier === 'free') {
+    const previous = await service.store.get('SELECT payload FROM agent_discoveries WHERE account_id=? ORDER BY created LIMIT 1', id);
+    if (previous) return service.crypto.open(previous.payload);
+    if (access.discoveryUsed || !access.remaining) throw new Error('Your free inbox discovery has already been used. You can still set preferences yourself.');
+  }
+  const initial = access.tier === 'free' && access.used === 0;
+  const list = access.tier === 'free' ? { messages: (await trialSample(service, id, gmail)).ids.map(id => ({ id })) } : await gmail('messages?maxResults=100&q=in%3Ainbox%20is%3Aunread');
+  if (access.tier === 'free' && !await reserveDiscovery(service, id)) throw new Error('Free discovery already started. Set preferences yourself if it was interrupted.');
   const sample = []; const source = new Map();
   for (const { id: messageId } of list.messages || []) {
     const message = await gmail(`messages/${encodeURIComponent(messageId)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=List-ID`);
@@ -81,7 +90,7 @@ export async function learnInbox(service, id, consent, provider) {
   for (const question of (Array.isArray(result.questions) ? result.questions : []).slice(0, 3)) {
     if (!source.has(question.messageId) || typeof question.question !== 'string' || question.question.length > 240 || !question.question.trim() || typeof question.reason !== 'string' || question.reason.length > 400) continue;
     if (!categoryScope(question.category)) continue;
-    await askPreference(service, id, source.get(question.messageId), preferences(account.rules.agent), { category: question.category, question: question.question, reason: question.reason });
+    await askPreference(service, id, source.get(question.messageId), preferences(account.rules.agent), { category: question.category, question: question.question, reason: question.reason }, { initial });
   }
   const discovery = { inspected: sample.length, summary: String(result.summary || 'Choose what you want to keep.').slice(0, 400), suggestions: (Array.isArray(result.suggestions) ? result.suggestions : []).filter(s => ['jobs', 'coldMail', 'newsletters', 'people'].includes(s.topic) && typeof s.note === 'string').slice(0, 4).map(s => ({ topic: s.topic, note: s.note.slice(0, 240) })) };
   await service.store.run('INSERT INTO agent_discoveries(account_id,provider,model,payload,created) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING', id, provider, discoveryModelKey(service.config.aiModel), service.crypto.seal(discovery), Date.now());
@@ -92,6 +101,9 @@ export async function runAgent(service, id, guard, emit = () => {}, mode = 'manu
   const account = await service.account(id); const p = preferences(account.rules.agent);
   if (!p.enabled || !p.consent || !service.config.aiKey) throw new Error('Save your preferences and enable AI processing before starting the agent.');
   if (p.consentProvider !== (service.config.aiProvider || 'openrouter')) throw new Error('AI provider changed. Confirm AI processing again in Preferences before running the agent.');
+  const access = await accessFor(service, id);
+  if (mode === 'daily') await requirePaid(service, id);
+  if (access.tier === 'free' && !access.remaining) throw new Error('Your free 100-email cleanup is complete. Additional and daily cleanups require a paid plan.');
   const gmail = service.client(account); const runId = randomUUID(); const decisions = []; const people = new Map(); const histories = new Map();
   const learnedCategories = await categoryContext(service, id);
   const policy = createHash('sha256').update(JSON.stringify({ rules: account.rules, provider: service.config.aiProvider || 'openrouter', model: service.config.aiModel })).digest('hex');
@@ -104,7 +116,12 @@ export async function runAgent(service, id, guard, emit = () => {}, mode = 'manu
     send({ type: 'stage', message: 'Finding unread inbox messages' });
     // Gather IDs before changing labels so Gmail pagination cannot skip shifted results.
     const ids = []; let pageToken; let pages = 0;
-    do {
+    if (access.tier === 'free') {
+      const sample = await trialSample(service, id, gmail);
+      const excluded = await service.store.all("SELECT message_id FROM agent_holds WHERE account_id=? UNION SELECT message_id FROM changes WHERE account_id=? AND status IN ('uncertain','undo_uncertain') UNION SELECT message_id FROM agent_assessments WHERE account_id=? AND policy_hash=?", id, id, id, policy);
+      const seen = new Set(excluded.map(row => row.message_id));
+      ids.push(...sample.ids.filter(messageId => !seen.has(messageId))); moreAvailable = sample.moreAvailable;
+    } else do {
       await guard();
       const page = await gmail(`messages?${new URLSearchParams({ q: 'in:inbox is:unread -is:starred -is:important', maxResults: '100', ...(pageToken ? { pageToken } : {}) })}`);
       const pageIds = (page.messages || []).map(m => m.id);
@@ -120,11 +137,14 @@ export async function runAgent(service, id, guard, emit = () => {}, mode = 'manu
     let cleanedLabel;
     for (const messageId of ids.slice(0, 500)) {
       await guard();
+      if (access.tier === 'free' && !await reserveFreeEmail(service, id, messageId)) continue;
       const latest = await service.account(id);
+      if (mode === 'daily') await requirePaid(service, id);
       if (JSON.stringify(latest.rules) !== JSON.stringify(account.rules) || (mode === 'daily' && !latest.rules.daily)) throw new Error('Preferences changed. Agent stopped; remaining emails were left unchanged.');
       let message;
       try { message = await gmail(`messages/${encodeURIComponent(messageId)}?format=full`); }
       catch (error) { if (error.status === 404) { kept++; continue; } throw error; }
+      if (!message.labelIds?.includes('UNREAD')) { kept++; continue; }
       const h = headersOf(message); const sender = senderAddress(h.from);
       send({ type: 'stage', message: 'Reading and deciding', inspected: decisions.length, total: ids.length });
       let protect = agentProtection(message, account.rules);
@@ -132,7 +152,7 @@ export async function runAgent(service, id, guard, emit = () => {}, mode = 'manu
       const scope = scopeFor(message); const specificMemory = await memoryFor(service, id, scope);
       const earlyException = matchingException(p.exceptionsRules, sender, null);
       if (!protect && earlyException?.action === 'keep') protect = 'Your sender exception keeps this email';
-      if (!protect && specificMemory && (!Number.isFinite(Number(message.internalDate)) || Number(message.internalDate) < specificMemory.effectiveFrom)) {
+      if (!protect && specificMemory && (!Number.isFinite(Number(message.internalDate)) || Number(message.internalDate) < specificMemory.effectiveFrom) && !specificMemory.initialSampleIds?.includes(message.id)) {
         await holdEmail(service, id, message.id, scope, specificMemory.sourceQuestion);
         protect = 'Received before your answer; left unchanged';
       }
@@ -151,7 +171,7 @@ export async function runAgent(service, id, guard, emit = () => {}, mode = 'manu
       if (!protect && !classified && !exception && !specificMemory && (learnedCategories.memories.length || learnedCategories.questions.length)) {
         await holdEmail(service, id, message.id, scope); protect = 'Uncertain category; left unchanged to respect your general preferences';
       }
-      if (!protect && memory?.scope.kind === 'category' && (!Number.isFinite(Number(message.internalDate)) || Number(message.internalDate) < memory.effectiveFrom)) {
+      if (!protect && memory?.scope.kind === 'category' && (!Number.isFinite(Number(message.internalDate)) || Number(message.internalDate) < memory.effectiveFrom) && !memory.initialSampleIds?.includes(message.id)) {
         await holdEmail(service, id, message.id, broadScope, memory.sourceQuestion); protect = 'Received before your category answer; left unchanged';
       }
       const pending = classified ? learnedCategories.questions.find(q => q.scope_hash === broadScope.scopeHash) : null;
@@ -201,7 +221,7 @@ export async function runAgent(service, id, guard, emit = () => {}, mode = 'manu
       await service.store.run('UPDATE runs SET changed=?,skipped=? WHERE id=?', changed, kept, runId);
       send({ type: 'decision', ...decisions.at(-1), inspected: decisions.length, total: ids.length, changed, kept, unsubscribed });
     }
-    const detail = `${decisions.length} inspected; ${changed} changed; ${kept} kept; ${unsubscribed} unsubscribe requests.${moreAvailable ? ' More unread mail remains; continue in another bounded run.' : ''}`;
+    const detail = `${decisions.length} inspected; ${changed} changed; ${kept} kept; ${unsubscribed} unsubscribe requests.${moreAvailable ? ' More unread mail remains.' : ''}`;
     await service.store.run("UPDATE runs SET status='completed',detail=? WHERE id=?", detail, runId);
     const result = { type: 'complete', runId, changed, kept, unsubscribed, inspected: decisions.length, moreAvailable }; send(result); return result;
   } catch (error) {

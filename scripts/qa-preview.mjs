@@ -14,9 +14,11 @@ try {
   await page.getByRole('heading', { name: /Your inbox/ }).waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Desktop must not overflow');
   await page.screenshot({ path: resolve(output, 'gmail-cleanup-landing-desktop.png') });
+  assert.equal(await page.getByText('IN DEVELOPMENT', { exact: true }).count(), 0);
+  await page.route('**/auth/google', route => route.fulfill({ contentType: 'text/plain', body: 'OAuth entry reached (browser test)' }));
   await page.getByRole('button', { name: 'Connect Gmail', exact: true }).click();
-  await page.getByRole('status').filter({ hasText: 'does not access or modify' }).waitFor();
-  await page.getByRole('button', { name: 'Dismiss notice' }).click();
+  await page.waitForURL('**/auth/google');
+  await page.goto(url, { waitUntil: 'networkidle' });
   await page.getByLabel('Mark matching emails as read').check();
   await page.getByRole('button', { name: 'Preview my plan' }).click();
   assert.match(await page.locator('.preview-result').innerText(), /Mark 2 as read/);
@@ -24,12 +26,12 @@ try {
   await page.getByRole('button', { name: 'Preview my plan' }).click();
   assert.match(await page.locator('.preview-result').innerText(), /Daily routine is paused/);
   await page.getByRole('button', { name: 'Can I connect Gmail today?' }).click();
-  assert.match(await page.locator('#faq-3').innerText(), /Not on this public preview/);
+  assert.match(await page.locator('#faq-3').innerText(), /Connect Gmail/);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(300);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Mobile must not overflow');
   await page.screenshot({ path: resolve(output, 'gmail-cleanup-landing-mobile.png') });
   assert.deepEqual(errors, []);
-  console.log('Public preview passed desktop/mobile layout, disclosure, checkbox plan, daily toggle, FAQ, and browser-error checks. No live mailbox actions performed.');
+  console.log('Public preview passed desktop/mobile layout, OAuth entry, checkbox plan, daily toggle, FAQ, and browser-error checks. No live mailbox actions performed.');
 } finally { await browser.close(); }

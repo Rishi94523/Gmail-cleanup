@@ -1,8 +1,8 @@
 # Gmail-cleanup (Inboxclean)
 
-**Status: in development.** [Open the public product preview](https://gmail-cleanup-web-450826266929.us-central1.run.app), deployed on Google Cloud Run. This repository also contains a local Gmail backend prototype. Production mailbox processing and cloud scheduling are not implemented yet. No live Gmail validation or thousand-user load test has been completed.
+[Open Inboxclean](https://gmail-cleanup-web-450826266929.us-central1.run.app). The Cloud Run service serves the React landing page, Google OAuth, and the Gmail dashboard at `/app`, backed by Neon PostgreSQL. New accounts receive one free cleanup of up to 100 unread inbox emails. Daily and additional cleanups require a server-controlled paid entitlement; checkout and cloud daily scheduling are not enabled yet.
 
-The backend now uses shared PostgreSQL on Neon when `DATABASE_URL` is configured, with SQLite retained for offline development/tests. It implements OAuth, cleanup review, reversible label changes, and local scheduling. Its 21 automated tests use a test-only provider adapter for Gmail actions. Real-Neon integration checks additionally verify HTTP flows, persistence across app instances/restarts, transaction rollback, and account locks. See [NEON_SETUP.md](NEON_SETUP.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for the validated scope and remaining cloud work.
+The free first-run flow is: connect Gmail, explicitly allow AI processing, discover preferences from a saved sample of up to 100 emails, answer broad questions, then authorize cleanup. The same sample is used for cleanup. Important and uncertain mail stays; eligible mail is marked read, archived, or both according to saved permissions. An exhausted allowance cannot be reset by reloading, changing preferences, undoing a run, or reconnecting. Ambiguous failures consume a reservation rather than replaying model calls. The encrypted sample is removed on disconnect; hashed quota and message-use records remain to prevent repeated free trials.
 
 A Gmail agent with editable preferences, persistent questions for uncertain mail, reversible label/read changes, and separately permitted intelligent unsubscribe. It learns from explicit answers and leaves held emails unchanged. See [PREFERENCE_LEARNING.md](PREFERENCE_LEARNING.md) for storage and behavior. No fabricated mailbox results are shown in the app.
 
@@ -19,7 +19,7 @@ npm.cmd start
 
 Open http://localhost:3000. Until OAuth is configured, the app shows setup instructions and lets you explore the rules. It cannot read or change Gmail yet. The generated encryption key stays in the ignored `.env` file; do not share or commit it.
 
-The separate public-facing React preview builds with `npm.cmd run check:web` and `npm.cmd run build:web`. Its controls use explicitly labelled example messages and never access Gmail. The local dashboard is served by the Node backend above.
+The public-facing React landing page builds with `npm.cmd run check:web` and `npm.cmd run build:web`. Its controls use explicitly labelled example messages and never access Gmail. Its Connect Gmail button starts Google OAuth. The dashboard is served by the same Node backend; set `SERVE_LANDING=true` locally to serve the landing page at `/` and the dashboard at `/app`.
 
 ## Neon Postgres
 
@@ -79,7 +79,7 @@ The user must explicitly allow AI processing for the selected provider. Discover
 
 ## Daily agent
 
-Enable daily cleanup in saved rules and choose an hour and IANA timezone. This is explicit authorization for future matching cleanup actions; unsubscribe remains separately approved each time.
+Daily cleanup is reserved for paid entitlements and is disabled on the Cloud Run release. The following local scheduler behavior applies only to a paid account on a continuously running local server: enable daily cleanup in saved rules and choose an hour and IANA timezone. This is explicit authorization for future matching cleanup actions; unsubscribe remains separately approved each time.
 
 The **server** checks due accounts every minute, including after startup. A persisted account-local date prevents duplicate daily runs. An account lease prevents overlapping scans, cleanup, unsubscribe, and undo operations. Failed/ambiguous runs are not silently rerun that day; inspect Activity and reconnect or run a new approved scan as appropriate.
 
@@ -93,14 +93,9 @@ The configured Neon PostgreSQL database stores per-account rules, encrypted OAut
 
 Sessions use random, hashed tokens and HttpOnly/SameSite cookies (Secure under HTTPS). OAuth state and PKCE bind callbacks to the initiating session. Mutating API routes require both same-origin requests and CSRF tokens. API data is scoped to the session's connected Gmail account. Disconnect pauses jobs, revokes Google access, and deletes that account's local data and undo history; emails themselves remain as previously modified.
 
-A multi-stage Dockerfile builds the React site and serves the **public product preview** on port 8080. It intentionally does not deploy the local SQLite scheduler to Cloud Run. See [deployment instructions](deploy/README.md) for CLI login, project setup, and the rollout plan. The deployed site is a public preview; live Gmail processing is not enabled.
+A multi-stage Dockerfile builds the React site and runs `server/index.js` on port 8080. The deployment script stores OAuth credentials, the stable token-encryption key, the pooled Neon URL, and the selected AI key as version-pinned Google Secret Manager bindings. The runtime identity gets access only to those secrets. Local `.env` files and mailbox data are excluded from Docker and Cloud Build contexts. The process-local scheduler is disabled on Cloud Run. See [deployment instructions](deploy/README.md).
 
-```powershell
-docker build -t inboxclean .
-docker run -p 127.0.0.1:8080:8080 inboxclean
-```
-
-For internet hosting, put the service behind a TLS reverse proxy, configure the external HTTPS `APP_URL` and OAuth redirect, mount persistent storage, and run one application instance. Add operational alerts, encrypted backups, retention policy, and Google-required privacy/verification materials before a public launch. Mail data is not currently auto-purged while an account remains connected, so disk usage must be managed. This is an initial application, not a completed public SaaS launch.
+Google OAuth currently operates with configured test users. Public OAuth verification, paid checkout, Cloud Tasks/Scheduler, operational hardening, retention controls, and thousand-user load validation remain future work.
 
 ## Verification
 

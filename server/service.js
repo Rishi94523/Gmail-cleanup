@@ -1,3 +1,4 @@
+import { accessFor, requirePaid } from './access.js';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_RULES, validateRules, gmailQuery, headersOf, senderAddress, protectedReason, changesFor, undoChanges, dailyKey } from './rules.js';
 import { gmailClient, metadata, mapLimit, classify } from './gmail.js';
@@ -27,6 +28,7 @@ export class InboxService {
     finally { clearInterval(heartbeat); await this.store.run('DELETE FROM locks WHERE account_id=? AND owner=?', id, owner); }
   }
   async saveRules(id, input) {
+    if (input.daily) await requirePaid(this, id);
     const existingAgent = (await this.account(id)).rules.agent;
     const agent = input.agent ? { ...existingAgent, ...input.agent } : existingAgent;
     const rules = { ...validateRules(input), aiConsentProvider: input.aiConsentProvider || '', ...(agent ? { agent: preferences(agent) } : {}) };
@@ -162,7 +164,7 @@ export class InboxService {
   }); }
   async daily() {
     for (const row of await this.store.all('SELECT id,rules,last_day FROM accounts')) {
-      const rules = JSON.parse(row.rules); if (!rules.daily) continue;
+      const rules = JSON.parse(row.rules); if (!rules.daily || !(await accessFor(this, row.id)).dailyAllowed) continue;
       const day = dailyKey(rules); if (!day || row.last_day === day) continue;
       try {
         await this.locked(row.id, async guard => {

@@ -1,16 +1,18 @@
 # Inbox agent workflow
 
+The free tier uses one persisted sample of up to 100 unread inbox emails for discovery and cleanup. A database allowance reserves each email once before model work; additional and daily cleanups are gated by paid entitlements. Checkout and cloud daily scheduling are not enabled. Initial setup answers can apply to that sample; questions raised during a cleanup still hold emails permanently.
+
 The main dashboard now asks for preferences, then runs the agent without asking the user to select individual messages. The old age/category preview is retained under advanced settings for compatibility; it is no longer the primary flow.
 
-## Implemented locally
+## Implemented agent flow
 
-- Explicit AI-processing consent. Discovery sends sender/subject metadata from up to 40 inbox messages to the selected provider and asks for suggestions; it does not change mail or silently enable suggested preferences. Provider changes require renewed consent, and failures never switch providers automatically.
+- Explicit AI-processing consent. Discovery sends sender/subject metadata from up to 100 unread inbox messages to the selected provider and asks for suggestions; it does not change mail or silently enable suggested preferences. Provider changes require renewed consent, and failures never switch providers automatically.
 - Preferences for recruiting/job opportunities, cold outreach, people previously emailed, newsletters, interests, exceptions, permitted action, automatic unsubscribe, and daily schedule.
 - Default permitted action is mark read. Archive and mark read plus archive are separate choices. Automatic unsubscribe is a separate opt-in, with a supported one-click request and consistent marketing-only list history. No delete, trash, or send tool is available.
 - Discovery starts automatically when the user allows AI processing, and caches successful results by account/provider/model. It can create specific questions from the inbox sample in addition to the standard preference suggestions. No discovery happens before consent.
 - The model has an actual OpenAI-compatible `ask_preference` function tool. Questions are broad category preferences across senders, with canonical server wording and category deduplication. The agent supplies a supported category, not a brand-specific rule. The server saves an encrypted question and holds the email. It never guesses after a timeout. A 30-second deferral deadline is recorded; unanswered questions remain in the tray until answered or snoozed. Similar mail in a pending category is also held.
 - Answers create explicit, versioned, encrypted category preferences with timestamps and an audit trail, applying to future arrivals across senders. Previously held and pre-answer mail stays unchanged. Users can add separate sender/domain exceptions, such as keeping Apple product announcements while marking other announcements read. Preferences and exceptions remain editable. See [PREFERENCE_LEARNING.md](PREFERENCE_LEARNING.md).
-- Each run collects up to 500 unread inbox message IDs before changes, across internal Gmail pages. It skips persisted assessments for the same preference/model version, allowing subsequent runs to reach further into a backlog without reclassifying kept mail. Enumeration is bounded at 1,000 pages per run. This is not a completed 100,000-message load test.
+- Paid runs collect up to 500 unread inbox message IDs before changes, across internal Gmail pages. It skips persisted assessments for the same preference/model version, allowing subsequent runs to reach further into a backlog without reclassifying kept mail. Enumeration is bounded at 1,000 pages per run. This is not a completed 100,000-message load test.
 - Email text is capped at 12,000 characters per decision. Plain-text MIME parts are used; HTML-only mail falls back to Gmail's snippet. Attachments and external resources are not fetched. Incomplete context should produce a keep decision.
 - Known people are approximated using sent-mail history, not Google Contacts. This evidence is cached by sender during a run.
 - AI returns one permitted action and a reason, or asks a preference question. Invalid responses and unsupported actions become keep; low confidence produces a deferred question. Model-reported confidence is not a calibrated accuracy guarantee; evaluate before broad autonomous use.
@@ -32,16 +34,16 @@ To switch to OpenRouter, change only `AI_PROVIDER=openrouter` and configure `OPE
 
 `npm.cmd run ai:check` sends one synthetic JSON connectivity request to the selected provider, without reading Gmail. The shared transport requests JSON, rejects incomplete output, uses a 120-second timeout, and redacts provider error bodies. Both discovery and advanced/autonomous decisions use it. Jev's typed decision API is a future adapter/evaluation task; changing to OpenRouter alone does not implement Jev support.
 
-Nebius reference: https://docs.tokenfactory.nebius.com/ai-models-inference/json . Live Nemotron JSON-mode support and account access must be verified once the key is present.
+Nebius reference: https://docs.tokenfactory.nebius.com/ai-models-inference/json . Nemotron JSON-mode authentication and native `ask_preference` tool calls passed live synthetic checks on October 18, 2026; this is not a model-quality evaluation.
 
-Run `npm.cmd run db:migrate` before starting this version against Postgres. Migration 002 adds an assessment ledger; migration 003 adds questions, memories, audit events, held messages, subscription request state, and cached discovery. The existing encrypted plans/changes/runs tables hold decision history and undo records.
+Run `npm.cmd run db:migrate` before starting this version against Postgres. Migration 004 adds the persistent free allowance, per-email reservations, and encrypted first-run sample. Migration 002 adds an assessment ledger; migration 003 adds questions, memories, audit events, held messages, subscription request state, and cached discovery. The existing encrypted plans/changes/runs tables hold decision history and undo records.
 
 ## Remaining work
 
-- Cloud Tasks workers and Cloud Scheduler dispatch, bounded runtime/cost budgets, incremental Gmail history checkpoints, recovery and account cancellation across restarts. The current agent request is local server execution, not a durable Cloud Run job.
+- Cloud Tasks workers and Cloud Scheduler dispatch, bounded runtime/cost budgets, incremental Gmail history checkpoints, recovery and account cancellation across restarts. The current agent runs in a streamed HTTP request, not a durable queued job.
 - Live validation of automatic unsubscribe and subscription intent classification. The implementation requires opt-in, at least two same-list messages classified as pure unwanted marketing, no transactional evidence or wanted publication, and supported authenticated one-click headers. Ambiguous requests are never replayed. Explicit learned list preferences still cannot bypass transactional protections. Unsubscribe cannot be reversed by undo.
 - Model evaluation on a labeled dataset: important-mail false-clear rate first, then decision coverage, latency, and cost. Compare OpenRouter's configured model with Jev using the same preferences/content and permission gate. Include interviews, relevant LinkedIn mail, known correspondents, wanted newsletters, unwanted subscriptions, cold pitches, HTML-only/truncated emails, and malicious instructions inside emails. Jev has not been integrated or benchmarked.
-- Public privacy/data-retention policy, restricted-scope OAuth verification, production backend deployment, and multi-user load testing. The existing public Cloud Run URL still serves the previous preview.
+- Public privacy/data-retention policy, restricted-scope OAuth verification, paid checkout, and multi-user load testing. The Cloud Run backend serves the landing page, OAuth, and `/app`; daily scheduling is deliberately disabled.
 
 Official Jev sources reviewed: https://typesafe.ai/ and https://docs.typesafe.ai/introduction/quickstart . Its typed decision interface is relevant to classification; vendor confidence/price claims are not a substitute for this application's evaluation.
 
