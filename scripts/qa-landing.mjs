@@ -15,7 +15,7 @@ try{
  assert.equal((await page.request.get(`${base}/favicon.svg`)).status(),200);
  assert.equal(await page.locator('link[rel=icon]').getAttribute('href'),'/favicon.svg');
  await page.screenshot({path:`${output}/hero-desktop.png`});
- await page.getByRole('link',{name:/See it in action/}).click();await page.locator('#agent-demo').scrollIntoViewIfNeeded();
+ await page.getByRole('link',{name:/See it in action/}).click();await page.locator('#agent-demo').scrollIntoViewIfNeeded();await page.getByRole('button',{name:/Replay/}).click();
  await page.clock.runFor(5000);assert.equal(await page.locator('.demo-option.selected').count(),1);await page.locator('#agent-demo').screenshot({path:`${output}/demo-question-desktop.png`});
  await page.clock.runFor(14000);assert.equal(await page.locator('#agent-demo').getAttribute('data-stage'),'cleanup');assert.ok(await page.locator('.demo-email.decided').count()>0);await page.locator('#agent-demo').screenshot({path:`${output}/demo-cleanup-desktop.png`});
  await page.clock.runFor(7000);assert.equal(await page.locator('#agent-demo').getAttribute('data-stage'),'questions');
