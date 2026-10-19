@@ -159,7 +159,7 @@ test('batched agent handles 45 approved low-priority messages in five model call
   const originalFetch = globalThis.fetch; let calls = 0; let active = 0; let peak = 0;
   globalThis.fetch = async (_url, options) => {
     calls++; active++; peak = Math.max(peak, active);
-    const body = JSON.parse(options.body); assert.equal(body.max_tokens, undefined);
+    const body = JSON.parse(options.body); assert.equal(body.max_tokens, 50000);
     const items = JSON.parse(body.messages[1].content); assert.ok(items.length <= 10);
     await new Promise(resolve => setTimeout(resolve, 5)); active--;
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ decisions: items.map(item => ({ id: item.id, decision: { action: 'read', confidence: .94, preferenceCategory: 'product_announcements', categoryConfidence: .96, reason: 'An ordinary promotion in the topic you approved.' } })) }) } }] });

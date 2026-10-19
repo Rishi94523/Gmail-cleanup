@@ -20,8 +20,8 @@ export async function chatJSON(config, messages, fetcher = fetch, tools = []) {
   const url = provider === 'nebius' ? `https://api.tokenfactory.${region}.nebius.com/v1/chat/completions` : 'https://openrouter.ai/api/v1/chat/completions';
   let response;
   try {
-    // Let the provider choose its output budget and the model use its default reasoning.
-    response = await fetcher(url, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(120000), headers: { Authorization: `Bearer ${config.aiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: config.aiModel, temperature: 0, ...(tools.length ? { tools, tool_choice: 'auto' } : { response_format: { type: 'json_object' } }), messages }) });
+    // Explicitly override the provider's smaller default; retain default reasoning.
+    response = await fetcher(url, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(120000), headers: { Authorization: `Bearer ${config.aiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: config.aiModel, max_tokens: 50000, temperature: 0, ...(tools.length ? { tools, tool_choice: 'auto' } : { response_format: { type: 'json_object' } }), messages }) });
   } catch { throw failure('AI_UNAVAILABLE', `${aiLabel(config)} could not be reached or timed out. Remaining emails were left unchanged.`); }
   if (!response.ok) throw failure(`AI_HTTP_${response.status}`, `${aiLabel(config)} request failed (${response.status}). Check the API key, model access, and quota.`);
   try {

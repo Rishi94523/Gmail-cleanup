@@ -19,7 +19,8 @@ for (const provider of ['nebius', 'openrouter']) test(`${provider} requests use 
     assert.equal(url, provider === 'nebius' ? 'https://api.tokenfactory.us-north1.nebius.com/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions');
     assert.equal(options.headers.Authorization, `Bearer ${config.aiKey}`);
     const body = JSON.parse(options.body); assert.equal(body.model, config.aiModel); assert.equal(body.response_format.type, 'json_object');
-    for (const field of ['max_tokens', 'max_completion_tokens', 'chat_template_kwargs', 'reasoning', 'reasoning_effort']) assert.equal(Object.hasOwn(body, field), false);
+    assert.equal(body.max_tokens, 50000);
+    for (const field of ['max_completion_tokens', 'chat_template_kwargs', 'reasoning', 'reasoning_effort']) assert.equal(Object.hasOwn(body, field), false);
     assert.equal(options.redirect, 'error'); assert.ok(options.signal instanceof AbortSignal);
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{"action":"keep"}' } }] });
   });
@@ -31,12 +32,13 @@ test('provider errors never leak raw bodies or keys and never fallback to anothe
   assert.equal(calls, 1);
   await assert.rejects(chatJSON(config, [], async () => { throw new Error('secret-fixture-value'); }), error => !error.message.includes('secret-fixture-value'));
 });
-for (const provider of ['nebius', 'openrouter']) test(`${provider} preference tool calls retain default reasoning and output budgets`, async () => {
+for (const provider of ['nebius', 'openrouter']) test(`${provider} preference tool calls use 50,000 output tokens and retain default reasoning`, async () => {
   const config = aiConfig({ AI_PROVIDER: provider, NEBIUS_API_KEY: 'fixture', OPENROUTER_API_KEY: 'fixture' });
   const args = { category: 'product_announcements', question: 'How should I handle product announcements?', reason: 'Preference unknown.' };
   const result = await chatJSON(config, [], async (_url, options) => {
     const body = JSON.parse(options.body);
-    for (const field of ['max_tokens', 'max_completion_tokens', 'chat_template_kwargs', 'reasoning', 'reasoning_effort']) assert.equal(Object.hasOwn(body, field), false);
+    assert.equal(body.max_tokens, 50000);
+    for (const field of ['max_completion_tokens', 'chat_template_kwargs', 'reasoning', 'reasoning_effort']) assert.equal(Object.hasOwn(body, field), false);
     assert.deepEqual(body.tools, [ASK_PREFERENCE_TOOL]);
     assert.equal(body.tool_choice, 'auto');
     return Response.json({ choices: [{ finish_reason: 'tool_calls', message: { tool_calls: [{ function: { name: 'ask_preference', arguments: JSON.stringify(args) } }] } }] });
