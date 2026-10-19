@@ -124,3 +124,28 @@ test('discovery rejects invented career questions and caches the evidence-backed
     assert.deepEqual(await learnInbox(f.service, f.id, true, 'openrouter'), result); assert.equal(calls, 1);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test('topic actions stay independent; a topic may archive while another only marks read', async t => {
+  const f = fixture(t, { topicActions: true, keepPeople: false, action: 'read' });
+  for (const [category, action] of [['product_announcements', 'archive'], ['newsletters', 'read']]) {
+    f.store.run('INSERT INTO preference_memories(id,account_id,scope_hash,payload,updated) VALUES(?,?,?,?,?)', category, f.id, `category:${category}`, f.crypto.seal({ scope: { kind: 'category', category, scopeHash: `category:${category}` }, action, effectiveFrom: 0 }), Date.now());
+  }
+  const infer = async (config, prompt, input) => ({ action: input.sender.startsWith('noise@') ? 'archive' : 'read', confidence: .99, reason: 'Follows this topic preference', preferenceCategory: input.sender.startsWith('noise@') ? 'product_announcements' : input.sender.startsWith('person@') ? 'newsletters' : 'unknown', categoryConfidence: .99 });
+  await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', infer));
+  assert.ok(!f.mails.get('noise').labelIds.includes('INBOX')); assert.ok(f.mails.get('noise').labelIds.includes('UNREAD'));
+  assert.ok(f.mails.get('person').labelIds.includes('INBOX')); assert.ok(!f.mails.get('person').labelIds.includes('UNREAD'));
+  assert.ok(f.mails.get('uncertain').labelIds.includes('UNREAD')); assert.ok(f.mails.get('uncertain').labelIds.includes('INBOX'));
+});
+
+test('discovery can invent an evidence-backed broad topic outside the examples', async t => {
+  const f = fixture(t, { topicActions: true }); f.mails.get('noise').payload.headers.find(h => h.name === 'Subject').value = 'University campus notices for this semester';
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ summary: 'University notices recur.', questions: [{ messageId: 'noise', category: 'topic_university_notices', question: 'How should I handle university notices?', reason: 'Campus notices appear in the sample.', evidenceQuote: 'University campus notices' }, { messageId: 'noise', category: 'topic_invented_messages', question: 'How should I handle invented messages?', reason: 'Not supported.', evidenceQuote: 'This is not in the supplied message' }] }) } }] });
+  try {
+    const discovery = await learnInbox(f.service, f.id, true, 'openrouter');
+    assert.ok(discovery.evidenceCategories.includes('topic_university_notices'));
+    const questions = f.store.all('SELECT payload FROM agent_questions').map(q => f.crypto.open(q.payload));
+    assert.equal(questions.length, 1); assert.equal(questions[0].question, 'How should I handle university notices?');
+    assert.deepEqual(questions[0].options.map(o => o.id), ['keep', 'read', 'archive', 'both', 'later']);
+  } finally { globalThis.fetch = originalFetch; }
+});

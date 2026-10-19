@@ -189,7 +189,7 @@ if (auth) {
   $('#notice-banner').textContent = messages[auth] || 'Review your connection settings.'; $('#notice-banner').hidden = false;
 }
 showPage(location.hash.slice(1));
-refresh(true).then(async () => { if (state.connected && (state.access?.remaining ?? 1) > 0 && (!state.rules.agent?.enabled || (auth === 'connected' && !state.access?.used))) { $('#notice-banner').hidden = true; await onboarding.open(); } }).catch(err => error(`The app could not load: ${err.message}`)).finally(() => document.body.classList.remove('booting'));
+refresh(true).then(async () => { if (state.connected && (state.access?.remaining ?? 1) > 0 && (!state.rules.agent?.enabled || (auth === 'connected' && !state.access?.used) || (state.runs[0]?.status === 'needs_review' && !state.runs[0]?.changed))) { $('#notice-banner').hidden = true; await onboarding.open(); } }).catch(err => error(`The app could not load: ${err.message}`)).finally(() => document.body.classList.remove('booting'));
 
 const agentDefaults = { enabled: false, consent: false, consentProvider: '', keepJobs: true, coldMail: 'exceptional', keepPeople: true, keepNewsletters: true, autoUnsubscribe: false, action: 'read', exceptions: '', interests: '' };
 function providerName() { return state.aiProvider === 'nebius' ? 'Nebius Token Factory' : 'OpenRouter'; }
@@ -211,6 +211,7 @@ function renderAgentControls() {
   $('.agent-budget').textContent = free ? `Free first cleanup: ${state.access.used} of 100 emails processed. Daily and additional cleanups are for paid plans. Paid plans are not on sale yet.` : 'Each run processes up to 500 unread messages. Nothing is deleted.';
   $('#save-preferences').textContent = free && state.access.remaining ? 'Save & start free cleanup →' : 'Save preferences →';
   $('#rule-daily').disabled = free || !state.schedulerActive;
+  $('#pref-action').closest('.preference-card').hidden = Boolean(p.topicActions);
   $('#pref-daily').disabled = free || !state.schedulerActive;
   $('#agent-schedule-note').textContent = free ? 'Daily cleanup is reserved for paid plans. Your free first cleanup covers up to 100 emails.' : state.schedulerActive ? 'Runs at this time while the server stays running.' : 'Daily scheduling is disabled on this server. Manual agent runs are available once AI is configured.';
 }
@@ -301,6 +302,7 @@ function renderLearning() {
   const labels = { keep: 'Keep in inbox', read: 'Mark low-priority mail read', archive: 'Archive low-priority mail', both: 'Mark read and archive low-priority mail', unsubscribe: 'Unsubscribe from unwanted marketing on this list' };
   $('#learned-preferences').innerHTML = learningState.memories.length ? learningState.memories.map(m => `<form class="memory-card" data-memory="${escape(m.id)}"><strong>${escape(m.scope.label || m.scope.listId || m.scope.sender)}</strong><p>${escape(m.explanation)}</p><label>Future handling<select name="action">${Object.entries(labels).filter(([action]) => action !== 'unsubscribe' || m.scope.listId).map(([action, label]) => `<option value="${action}" ${action === m.action ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="agent-actions"><button class="secondary" type="submit">Save change</button><button class="text-button" type="button" data-remove-memory="${escape(m.id)}">Forget this preference</button></div><small>Version ${number(m.version)} · still follows your allowed actions and protections.</small></form>`).join('') : '<p>As you answer questions, your preferences appear here.</p>';
   renderDiscovery(learningState.discovery);
+  if (state?.connected) renderExceptions();
 }
 $('#questions-tray').addEventListener('submit', event => {
   event.preventDefault(); const form = event.target.closest('[data-question]'); if (!form) return;
@@ -321,10 +323,12 @@ setInterval(() => { if (state?.connected && !busy && !document.hidden) loadLearn
 
 function renderExceptions() {
   const previous = $('#exception-category').value;
-  $('#exception-category').replaceChildren(new Option('All mail from this sender', 'all'), ...Object.entries(state.preferenceCategories || {}).map(([key, item]) => new Option(item.label, key)));
+  const available = { ...state.preferenceCategories };
+  for (const item of [...learningState.memories, ...learningState.questions]) if (item.scope?.kind === 'category') available[item.scope.category] = { label: item.scope.label };
+  $('#exception-category').replaceChildren(new Option('All mail from this sender', 'all'), ...Object.entries(available).map(([key, item]) => new Option(item.label, key)));
   if ([...$('#exception-category').options].some(o => o.value === previous)) $('#exception-category').value = previous;
   const labels = { keep: 'Keep in inbox', read: 'Mark read; keep in inbox', archive: 'Archive', both: 'Mark read and archive' };
-  $('#sender-exceptions').innerHTML = (state.rules.agent?.exceptionsRules || []).map(rule => `<div class="list-row"><div class="row-main"><strong>${escape(rule.value)}</strong><p>${escape(state.preferenceCategories?.[rule.category]?.label || 'All mail')} · ${escape(labels[rule.action])}</p></div><button class="text-button" type="button" data-remove-exception="${escape(rule.id)}">Remove exception</button></div>`).join('');
+  $('#sender-exceptions').innerHTML = (state.rules.agent?.exceptionsRules || []).map(rule => `<div class="list-row"><div class="row-main"><strong>${escape(rule.value)}</strong><p>${escape(available[rule.category]?.label || 'All mail')} · ${escape(labels[rule.action])}</p></div><button class="text-button" type="button" data-remove-exception="${escape(rule.id)}">Remove exception</button></div>`).join('');
 }
 $('#exception-form').addEventListener('submit', event => {
   event.preventDefault();

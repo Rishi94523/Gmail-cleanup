@@ -50,3 +50,9 @@ Official Jev sources reviewed: https://typesafe.ai/ and https://docs.typesafe.ai
 ## Verification
 
 `npm.cmd run build`, `npm.cmd test`, `node scripts/qa-agent.mjs`, and `node --env-file=data/neon-test.env scripts/verify-neon.mjs` cover compilation, agent permissions and uncertainty, tool calls, future-only preference learning, unsubscribe safeguards, desktop/mobile MCQ/edit flows, and question/memory persistence and undo on a real isolated Neon branch. Gmail, model responses and unsubscribe networking are fixtures in these checks. No live mailbox cleanup, live unsubscribe, or real model accuracy has been validated by them.
+
+## Independent topic actions
+
+New onboarding enables `agent.topicActions`. Each discovered topic offers keep, mark read, archive, both, and decide later. Category memories carry the independently authorized action; the final screen reviews each one instead of rewriting them all to a global action. Unclassified topics stay untouched. The examples in the discovery prompt are not a fixed question list: new `topic_` slugs require cited source evidence. First-run question wording is generated for the available handling choices. Legacy manual settings remain compatible.
+
+The October 19 failure was reproduced read-only: the provider returned HTTP 200 with `finish_reason=length` after 4096 completion tokens. With `chat_template_kwargs.enable_thinking=false`, the same read-only decision returned a valid tool call in 91 tokens. This uses the control described in the [NVIDIA model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4). It does not increase response budgets or replay mailbox writes.

@@ -3,7 +3,7 @@ import { headersOf, senderAddress } from './rules.js';
 import { PREFERENCE_CATEGORIES, categoryScope, discoveryModelKey } from './preference-categories.js';
 
 export const ASK_PREFERENCE_TOOL = {
-  type: 'function', function: { name: 'ask_preference', description: 'Ask one broad category preference that applies across products and senders. Never ask whether the user wants a specific brand or mailing list. Reuse existing category preferences; sender exceptions are managed separately by the user. The email stays unchanged. The server supplies canonical wording and permitted choices. Never wait for an answer.', parameters: { type: 'object', additionalProperties: false, properties: { category: { type: 'string', enum: Object.keys(PREFERENCE_CATEGORIES) }, question: { type: 'string', maxLength: 240 }, reason: { type: 'string', maxLength: 400 } }, required: ['category', 'question', 'reason'] } }
+  type: 'function', function: { name: 'ask_preference', description: 'Ask one broad category preference that applies across products and senders. Never ask whether the user wants a specific brand or mailing list. Reuse existing category preferences; sender exceptions are managed separately by the user. The email stays unchanged. Use a broad reusable topic; examples include job alerts or newsletters, but invent a topic_ slug when the actual email needs a different topic. The server supplies permitted choices. Never wait for an answer.', parameters: { type: 'object', additionalProperties: false, properties: { category: { type: 'string', pattern: '^(?:' + Object.keys(PREFERENCE_CATEGORIES).join('|') + '|topic_[a-z][a-z0-9_]{2,48})$' }, question: { type: 'string', maxLength: 240 }, reason: { type: 'string', maxLength: 400 } }, required: ['category', 'question', 'reason'] } }
 };
 export function scopeFor(message) {
   const h = headersOf(message); const sender = senderAddress(h.from);
@@ -12,7 +12,7 @@ export function scopeFor(message) {
 }
 export function choicesFor(p, scope) {
   const labels = { read: 'Mark future low-priority mail as read', archive: 'Archive future low-priority mail', both: 'Mark read and archive future low-priority mail' };
-  return [{ id: 'keep', label: scope.kind === 'category' ? 'Keep these in my inbox' : 'Always keep this sender or list' }, { id: p.action, label: labels[p.action] }, ...(p.autoUnsubscribe && scope.listId ? [{ id: 'unsubscribe', label: 'Unsubscribe from future unwanted marketing on this list' }] : []), { id: 'later', label: 'Ask me tomorrow; leave emails alone' }];
+  return [{ id: 'keep', label: scope.kind === 'category' ? 'Keep these in my inbox' : 'Always keep this sender or list' }, ...(p.topicActions && scope.kind === 'category' ? Object.entries(labels).map(([id, label]) => ({ id, label })) : [{ id: p.action, label: labels[p.action] }]), ...(p.autoUnsubscribe && scope.listId ? [{ id: 'unsubscribe', label: 'Unsubscribe from future unwanted marketing on this list' }] : []), { id: 'later', label: 'Ask me tomorrow; leave emails alone' }];
 }
 export async function memoryFor(service, id, scope) {
   const row = await service.store.get('SELECT id,payload,version FROM preference_memories WHERE account_id=? AND scope_hash=?', id, scope.scopeHash);
@@ -28,7 +28,7 @@ export async function categoryContext(service, id) {
 export async function holdEmail(service, id, messageId, scope, questionId = null) {
   await service.store.run('INSERT INTO agent_holds(account_id,message_id,scope_hash,question_id,created) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING', id, messageId, scope.scopeHash, questionId, Date.now());
 }
-export async function askPreference(service, id, message, p, args, { initial = false } = {}) {
+export async function askPreference(service, id, message, p, args, { initial = false, authored = false } = {}) {
   if (!args || !categoryScope(args.category) || typeof args.question !== 'string' || !args.question.trim() || args.question.length > 240 || typeof args.reason !== 'string' || args.reason.length > 400 || Object.keys(args).some(k => !['category','question','reason'].includes(k))) throw new Error('Invalid preference question. Email was left unchanged.');
   const scope = categoryScope(args.category); const now = Date.now();
   const result = await service.store.transaction(async tx => {
@@ -37,7 +37,9 @@ export async function askPreference(service, id, message, p, args, { initial = f
     const memory = await tx.get('SELECT id FROM preference_memories WHERE account_id=? AND scope_hash=?', id, scope.scopeHash);
     if (memory) return { id: old?.id || null, status: 'already_learned' };
     const questionId = old?.id || randomUUID();
-    const payload = service.crypto.seal({ question: PREFERENCE_CATEGORIES[args.category].question, reason: args.reason, scope, initial, options: choicesFor(p, scope).map(o => initial ? { ...o, label: o.label.replace('future low-priority mail', 'low-priority emails in this first cleanup') } : o), sample: { subject: headersOf(message).subject || '(No subject)' } });
+    const fallback = PREFERENCE_CATEGORIES[args.category]?.question || `How should I handle ${scope.label.toLowerCase()}?`;
+    const wording = authored ? (args.question.length <= 110 && /^how\b/i.test(args.question) && !/@|https?:|www\.|[<>\r\n]/i.test(args.question) ? args.question : `How should I handle ${scope.label.toLowerCase()}?`) : fallback;
+    const payload = service.crypto.seal({ question: wording, reason: args.reason, scope, initial, options: choicesFor(p, scope).map(o => initial ? { ...o, label: o.label.replace('future low-priority mail', 'low-priority emails in this first cleanup') } : o), sample: { subject: headersOf(message).subject || '(No subject)' } });
     if (old) await tx.run("UPDATE agent_questions SET payload=?,status='pending',version=version+1,updated=?,deferred_at=?,snoozed_until=0 WHERE id=? AND account_id=?", payload, now, now + 30000, questionId, id);
     else await tx.run("INSERT INTO agent_questions(id,account_id,scope_hash,payload,status,created,updated,deferred_at) VALUES(?,?,?,?,'pending',?,?,?)", questionId, id, scope.scopeHash, payload, now, now, now + 30000);
     return { id: questionId, status: 'pending' };

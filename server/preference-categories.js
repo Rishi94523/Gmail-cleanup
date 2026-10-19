@@ -9,8 +9,10 @@ export const PREFERENCE_CATEGORIES = Object.freeze({
   cold_outreach: { label: 'Cold outreach', question: 'Do you want unsolicited business outreach in your inbox?' }
 });
 export function categoryScope(category) {
-  if (!Object.hasOwn(PREFERENCE_CATEGORIES, category || '')) return null;
-  return { kind: 'category', category, label: PREFERENCE_CATEGORIES[category].label, scopeHash: `category:${category}` };
+  if (Object.hasOwn(PREFERENCE_CATEGORIES, category || '')) return { kind: 'category', category, label: PREFERENCE_CATEGORIES[category].label, scopeHash: `category:${category}` };
+  if (!/^topic_[a-z][a-z0-9_]{2,48}$/.test(category || '')) return null;
+  const label = category.slice(6).replaceAll('_', ' ');
+  return { kind: 'category', category, label: label[0].toUpperCase() + label.slice(1), scopeHash: `category:${category}` };
 }
 export function discoveryModelKey(model) { return `${model || 'default'}:category-preferences-v1`; }
 export function validateExceptions(input) {

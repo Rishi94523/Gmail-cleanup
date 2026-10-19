@@ -1,3 +1,4 @@
+import { publicFailure } from './failures.js';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve, dirname, sep } from 'node:path';
@@ -122,7 +123,7 @@ export async function createApp(options = {}) {
           const emit = event => { if (!res.destroyed) res.write(`${JSON.stringify(event)}\n`); };
           const heartbeat = setInterval(() => emit({ type: 'heartbeat' }), 10000);
           try { await service.locked(id, guard => runAgent(service, id, guard, emit)); }
-          catch { emit({ type: 'error', message: 'Agent stopped. Check Activity for confirmed changes. Verify the AI key, model access, and Gmail connection before trying again.' }); }
+          catch (error) { emit({ type: 'error', ...publicFailure(error) }); }
           finally { clearInterval(heartbeat); res.end(); }
           return;
         }

@@ -18,6 +18,8 @@ for (const provider of ['nebius', 'openrouter']) test(`${provider} requests use 
     assert.equal(url, provider === 'nebius' ? 'https://api.tokenfactory.us-north1.nebius.com/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions');
     assert.equal(options.headers.Authorization, `Bearer ${config.aiKey}`);
     const body = JSON.parse(options.body); assert.equal(body.model, config.aiModel); assert.equal(body.response_format.type, 'json_object');
+    if (provider === 'nebius') assert.equal(body.chat_template_kwargs.enable_thinking, false);
+    else assert.equal(body.chat_template_kwargs, undefined);
     assert.equal(options.redirect, 'error'); assert.ok(options.signal instanceof AbortSignal);
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{"action":"keep"}' } }] });
   });
@@ -35,6 +37,6 @@ test('missing selected key does not send requests; malformed and truncated outpu
   assert.equal(called, false);
   const config = aiConfig({ NEBIUS_API_KEY: 'fixture', AI_PROVIDER: 'nebius' });
   for (const choice of [{ finish_reason: 'length', message: { content: '{"action":"read"}' } }, { finish_reason: 'stop', message: { content: 'not JSON' } }, { finish_reason: 'stop', message: { content: '[]' } }]) {
-    await assert.rejects(chatJSON(config, [], async () => Response.json({ choices: [choice] })), /incomplete or invalid JSON/);
+    await assert.rejects(chatJSON(config, [], async () => Response.json({ choices: [choice] })), error => choice.finish_reason === 'length' ? error.publicCode === 'AI_TRUNCATED' : error.publicCode === 'AI_INVALID_OUTPUT');
   }
 });

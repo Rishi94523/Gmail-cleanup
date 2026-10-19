@@ -6,7 +6,7 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
   root.innerHTML = `<header class="ob-header"><a class="wordmark" href="/">inboxclean<span class="brand-dot">.</span></a><span class="ob-connected"><i></i> Gmail connected</span></header><main class="ob-main"><div class="ob-panel" id="ob-panel"></div></main><footer class="ob-footer">Your first 100 emails. Your say in what stays.</footer>`;
   document.body.append(root);
   const panel = root.querySelector('#ob-panel');
-  let active = false; let working = false; let discovery; let question; let answered = 0; let total = 0; let finalAction = 'read'; let complete;
+  let active = false; let working = false; let discovery; let question; let answered = 0; let total = 0; let reviewPage = 0; let complete;
   const provider = () => getState().aiProvider === 'nebius' ? 'Nebius Token Factory' : 'OpenRouter and your selected model provider';
   const motion = (thinking = false) => `<div class="ob-agents ${thinking ? 'thinking' : ''}" aria-hidden="true"><span class="ob-orbit"></span><span class="ob-agent ob-reader">✉</span><span class="ob-agent ob-thinker"><i></i><i></i><i></i></span><span class="ob-agent ob-spark">✧</span></div>`;
   function render(content, thinking = false) { panel.innerHTML = `${motion(thinking)}<div class="ob-content">${content}</div>`; panel.classList.remove('ob-enter'); void panel.offsetWidth; panel.classList.add('ob-enter'); panel.querySelector('h1')?.setAttribute('tabindex', '-1'); panel.querySelector('h1')?.focus({ preventScroll: true }); }
@@ -28,7 +28,7 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
     thinking('Getting to know your inbox.', 'Looking for recurring topics and the mail you might want to keep. No emails are being changed.');
     try {
       const state = getState();
-      await request('/api/rules', { ...state.rules, daily: false, aiEnabled: false, agent: { ...state.rules.agent, enabled: false, consent: true, consentProvider: state.aiProvider } });
+      await request('/api/rules', { ...state.rules, daily: false, aiEnabled: false, agent: { ...state.rules.agent, enabled: false, topicActions: true, consent: true, consentProvider: state.aiProvider } });
       discovery = await request('/api/agent/learn', { consent: true, provider: state.aiProvider });
       await refresh(); working = false; await nextQuestion();
     } catch (error) { fail(error); }
@@ -40,7 +40,7 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
     total = Math.max(total, answered + questions.length);
     question = questions[0];
     if (!question) return review();
-    render(`<p class="ob-kicker">FROM YOUR INBOX · ${answered + 1} OF ${total}</p><h1>${escape(question.question)}</h1><p class="ob-copy ob-evidence">${escape(question.reason)}</p><form id="ob-question"><div class="ob-options">${question.options.map(o => `<label class="ob-option"><input type="radio" name="answer" value="${escape(o.id)}" required><span>${escape(o.id === 'keep' ? 'Keep these in my inbox' : o.id === 'later' ? 'Leave these alone for now' : o.id === 'unsubscribe' ? o.label : 'Tidy low-priority emails like these')}</span><span class="ob-option-check" aria-hidden="true">✓</span></label>`).join('')}</div><button class="primary ob-primary" type="submit">Continue →</button></form><p class="ob-detail">One preference across senders. You can add exceptions later.</p>`);
+    render(`<p class="ob-kicker">FROM YOUR INBOX · ${answered + 1} OF ${total}</p><h1>${escape(question.question)}</h1><p class="ob-copy ob-evidence">${escape(question.reason)}</p><form id="ob-question"><div class="ob-options ob-topic-options">${question.options.map(o => `<label class="ob-option"><input type="radio" name="answer" value="${escape(o.id)}" required><span>${escape(({ keep: 'Keep in inbox', read: 'Mark as read', archive: 'Archive', both: 'Read & archive', later: 'Decide later', unsubscribe: 'Unsubscribe' })[o.id] || o.label)}</span><span class="ob-option-check" aria-hidden="true">✓</span></label>`).join('')}</div><button class="primary ob-primary" type="submit">Continue →</button></form><p class="ob-detail">This action applies to this topic only. Nothing is deleted.</p>`);
     panel.querySelector('form').onsubmit = async event => {
       event.preventDefault(); if (working) return; working = true;
       const button = panel.querySelector('button'); button.disabled = true; button.textContent = 'Remembering…';
@@ -48,10 +48,21 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
       catch (error) { fail(error); }
     };
   }
-  function review() {
-    render(`<p class="ob-kicker">WE’VE GOT THE PICTURE</p><h1>How shall I tidy up?</h1><p class="ob-copy">I’ll use your answers to decide what matters. Important mail and anything uncertain will stay.</p><div class="ob-options ob-actions">${[['read','Mark as read','Keep it in the inbox, without the unread badge.'],['archive','Archive','Move it out of the inbox. Still there in All Mail.'],['both','Mark read & archive','A quieter inbox and unread count.']].map(([value,label,detail]) => `<label class="ob-option"><input type="radio" name="cleanup-action" value="${value}" ${value === finalAction ? 'checked' : ''}><span><strong>${label}</strong><small>${detail}</small></span><span class="ob-option-check" aria-hidden="true">✓</span></label>`).join('')}</div><button class="primary ob-primary" id="ob-start">Clean my first 100 →</button><p class="ob-detail">Only low-priority mail. Nothing deleted. Changes can be undone.</p>`);
-    panel.querySelectorAll('input').forEach(input => { input.onchange = () => { finalAction = input.value; }; });
-    panel.querySelector('button').onclick = clean;
+  async function review() {
+    const tray = await request('/api/agent/questions');
+    const memories = tray.memories.filter(m => m.scope.kind === 'category');
+    const labels = { keep: 'Keep in inbox', read: 'Mark as read', archive: 'Archive', both: 'Read & archive' };
+    const visible = memories.slice(reviewPage * 3, reviewPage * 3 + 3);
+    render(`<p class="ob-kicker">A DIFFERENT CHOICE FOR EACH TOPIC</p><h1>Your preferences, ready.</h1><p class="ob-copy">Each topic follows its own action. Important, uncertain, and unclassified mail stays.</p><div class="ob-topic-summary">${visible.length ? visible.map(m => `<label class="ob-topic-row"><span>${escape(m.scope.label)}</span><select data-memory="${escape(m.id)}" aria-label="Action for ${escape(m.scope.label)}">${Object.entries(labels).map(([value,label]) => `<option value="${value}" ${m.action === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>`).join('') : '<p class="ob-detail">No topic preferences yet. The agent will leave uncertain mail untouched.</p>'}</div>${memories.length > 3 ? `<div class="ob-pagination"><button type="button" id="ob-prev" ${reviewPage === 0 ? 'disabled' : ''}>Previous topics</button><span>${reviewPage + 1} / ${Math.ceil(memories.length / 3)}</span><button type="button" id="ob-next" ${(reviewPage + 1) * 3 >= memories.length ? 'disabled' : ''}>Next topics</button></div>` : ''}<button class="primary ob-primary" id="ob-start">${getState().access?.used ? `Clean remaining ${getState().access.remaining}` : 'Clean my first 100'} →</button><p class="ob-detail">Nothing deleted. Changes can be undone.</p>`);
+    panel.querySelectorAll('select').forEach(select => { select.onchange = async () => {
+      if (working) return; working = true; panel.querySelectorAll('select,button').forEach(el => { el.disabled = true; });
+      const memory = memories.find(m => m.id === select.dataset.memory);
+      try { await request('/api/agent/memories/edit', { memoryId: memory.id, version: memory.version, action: select.value }); working = false; await review(); }
+      catch (error) { fail(error); }
+    }; });
+    if (panel.querySelector('#ob-prev')) panel.querySelector('#ob-prev').onclick = () => { reviewPage--; review().catch(fail); };
+    if (panel.querySelector('#ob-next')) panel.querySelector('#ob-next').onclick = () => { reviewPage++; review().catch(fail); };
+    panel.querySelector('#ob-start').onclick = clean;
   }
   async function clean() {
     if (working) return; working = true;
@@ -59,9 +70,8 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
     try {
       const state = getState(); const tray = await request('/api/agent/questions');
       const categories = new Map(tray.memories.filter(m => m.scope.kind === 'category').map(m => [m.scope.category, m.action]));
-      const agent = { ...state.rules.agent, enabled: true, consent: true, consentProvider: state.aiProvider, action: finalAction, ...(categories.has('job_opportunities') ? { keepJobs: categories.get('job_opportunities') === 'keep' } : {}), ...(categories.has('newsletters') ? { keepNewsletters: categories.get('newsletters') === 'keep' } : {}) };
+      const agent = { ...state.rules.agent, enabled: true, consent: true, consentProvider: state.aiProvider, topicActions: true, ...(categories.has('job_opportunities') ? { keepJobs: categories.get('job_opportunities') === 'keep' } : {}), ...(categories.has('newsletters') ? { keepNewsletters: categories.get('newsletters') === 'keep' } : {}) };
       await request('/api/rules', { ...state.rules, agent, daily: false, aiEnabled: false });
-      for (const memory of tray.memories) if (memory.initialSampleIds?.length && ['read','archive','both'].includes(memory.action) && memory.action !== finalAction) await request('/api/agent/memories/edit', { memoryId: memory.id, version: memory.version, action: finalAction });
       await refresh();
       await startAgent(event => {
         if (event.type === 'decision') {

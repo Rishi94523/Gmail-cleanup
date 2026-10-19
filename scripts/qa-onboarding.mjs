@@ -12,7 +12,7 @@ const browser = await chromium.launch({ executablePath: 'C:/Program Files (x86)/
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } }); const errors = []; page.on('pageerror', e => errors.push(e.message));
   const state = { connected: true, configured: true, aiConfigured: true, aiProvider: 'nebius', aiModel: 'fixture-model', schedulerActive: false, csrf: 'fixture', email: 'fixture@example.invalid', access: { tier: 'free', used: 0, remaining: 100 }, rules: { ...DEFAULT_RULES }, runs: [], subscriptions: [], totals: {}, setupMissing: [] };
-  const q = (id, category, question) => ({ id, scope: { kind: 'category', category, label: category }, version: 1, initial: true, question, reason: 'A recurring pattern in this inbox sample.', sample: { subject: 'An example email' }, options: [{ id: 'keep', label: 'Keep' }, { id: 'read', label: 'Mark read' }, { id: 'later', label: 'Later' }] });
+  const q = (id, category, question) => ({ id, scope: { kind: 'category', category, label: category.replaceAll('_', ' ') }, version: 1, initial: true, question, reason: 'A recurring pattern in this inbox sample.', sample: { subject: 'An example email' }, options: [{ id: 'keep', label: 'Keep' }, { id: 'read', label: 'Mark read' }, { id: 'archive', label: 'Archive' }, { id: 'both', label: 'Both' }, { id: 'later', label: 'Later' }] });
   const tray = { questions: [q('unsupported-job', 'job_opportunities', 'Do you want job opportunities in your inbox?'), q('product', 'product_announcements', 'Do you want product announcements in your inbox?'), q('newsletter', 'newsletters', 'Do you want newsletters and blog updates in your inbox?')], memories: [], discovery: null };
   let release; const discoveryGate = new Promise(resolve => { release = resolve; }); let learned = false; let ran = false;
   await page.route('**/api/**', async route => {
@@ -25,10 +25,10 @@ try {
     else if (path === '/api/agent/questions/answer') {
       const data = route.request().postDataJSON(); assert.notEqual(data.questionId, 'unsupported-job');
       const item = tray.questions.find(q => q.id === data.questionId); tray.questions = tray.questions.filter(q => q !== item);
-      tray.memories.push({ id: item.id, version: 1, scope: item.scope, sourceQuestion: item.id, initialSampleIds: ['sample'], action: data.option, explanation: item.question }); json = { status: 'saved' };
+      tray.memories.push({ id: item.id, version: 1, scope: item.scope, sourceQuestion: item.id, initialSampleIds: ['sample'], action: data.option, explanation: item.question }); if (item.id === 'newsletter') for (const label of ['University notices', 'Community discussions', 'Travel offers', 'Delivery updates']) tray.memories.push({ id: label, version: 1, scope: { kind: 'category', category: `topic_${label.toLowerCase().replaceAll(' ', '_')}`, label }, action: 'read', initialSampleIds: ['sample'] }); json = { status: 'saved' };
     } else if (path === '/api/agent/memories/edit') { const data = route.request().postDataJSON(); const memory = tray.memories.find(m => m.id === data.memoryId); memory.action = data.action; memory.version++; json = { status: 'saved' }; }
     else if (path === '/api/agent/run') {
-      ran = true; assert.equal(state.rules.agent.action, 'archive'); assert.equal(tray.memories.find(m => m.id === 'product').action, 'archive'); assert.equal(state.rules.agent.autoUnsubscribe, false);
+      ran = true; assert.equal(state.rules.agent.topicActions, true); assert.equal(tray.memories.find(m => m.id === 'product').action, 'archive'); assert.equal(tray.memories.find(m => m.id === 'newsletter').action, 'read'); assert.equal(state.rules.agent.autoUnsubscribe, false);
       return route.fulfill({ contentType: 'application/x-ndjson', body: [{ type: 'stage', message: 'Reading', total: 2 }, { type: 'decision', action: 'archive', subject: 'Promotion', reason: 'Low priority', inspected: 1, changed: 1, kept: 0, total: 2 }, { type: 'complete', inspected: 2, changed: 1, kept: 1 }].map(e => JSON.stringify(e)).join('\n') + '\n' });
     } else throw new Error(`Unexpected route: ${path}`);
     await route.fulfill({ json });
@@ -52,15 +52,19 @@ try {
   await page.getByRole('heading', { name: 'Getting to know your inbox.' }).waitFor(); await check('thinking');
   release(); await page.getByRole('heading', { name: 'Do you want product announcements in your inbox?' }).waitFor();
   assert.equal(await page.locator('#onboarding h1').count(), 1); await check('question');
-  await page.getByLabel('Tidy low-priority emails like these').check(); await page.locator('#ob-question button').click();
+  await page.locator('#onboarding input[value=archive]').check(); await page.locator('#ob-question button').click();
   await page.getByRole('heading', { name: 'Do you want newsletters and blog updates in your inbox?' }).waitFor();
   await page.reload(); await page.getByRole('heading', { name: 'Do you want newsletters and blog updates in your inbox?' }).waitFor();
-  await page.locator('#onboarding input[value=keep]').check(); await page.locator('#ob-question button').click();
-  await page.getByRole('heading', { name: 'How shall I tidy up?' }).waitFor(); assert.equal(ran, false); await check('permission');
-  await page.locator('#onboarding input[value=archive]').check();
+  await page.locator('#onboarding input[value=read]').check(); await page.locator('#ob-question button').click();
+  await page.getByRole('heading', { name: 'Your preferences, ready.' }).waitFor(); assert.equal(ran, false); await check('permission');
+  assert.equal(await page.locator('.ob-topic-row').count(), 3);
+  await page.locator('#ob-next').click(); await page.locator('[aria-label="Action for Community discussions"]').waitFor(); await check('more-topics');
+  await page.locator('#ob-prev').click(); await page.locator('[aria-label="Action for product announcements"]').waitFor();
+  assert.equal(await page.locator('[aria-label="Action for product announcements"]').inputValue(), 'archive');
+  assert.equal(await page.locator('[aria-label="Action for newsletters"]').inputValue(), 'read');
   await page.locator('#ob-start').click(); await page.getByRole('heading', { name: 'Your first fresh start.' }).waitFor(); await check('complete');
   await page.emulateMedia({ reducedMotion: 'reduce' }); assert.equal(await page.locator('.ob-content').evaluate(el => getComputedStyle(el).animationName), 'none');
   await page.locator('#ob-dashboard').click(); assert.equal(await page.locator('.sidebar').isVisible(), true);
   assert.deepEqual(errors, []);
-  console.log('PASS consent before analysis; no sidebar or scrolling at desktop/390px/320px; animated analysis; evidence-only sequential questions; reload resumes; final archive permission; streamed cleanup; reduced motion; workspace after completion. Gmail/model are fixtures.');
+  console.log('PASS consent before analysis; no sidebar or scrolling at desktop/390px/320px; animated analysis; evidence-only sequential questions; reload resumes; independent topic actions and paginated review; streamed cleanup; reduced motion; workspace after completion. Gmail/model are fixtures.');
 } finally { await browser.close(); await app.close(); }

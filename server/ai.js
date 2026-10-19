@@ -1,5 +1,6 @@
 // One transport for discovery, autonomous decisions, and advanced classification.
 // Provider changes are explicit: never send mail to a fallback provider on failure.
+import { failure } from './failures.js';
 export function aiConfig(env = process.env) {
   const aiProvider = (env.AI_PROVIDER || 'openrouter').trim().toLowerCase();
   if (!['openrouter', 'nebius'].includes(aiProvider)) throw new Error('AI_PROVIDER must be openrouter or nebius.');
@@ -18,11 +19,12 @@ export async function chatJSON(config, messages, fetcher = fetch, tools = []) {
   const url = provider === 'nebius' ? 'https://api.tokenfactory.us-north1.nebius.com/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions';
   let response;
   try {
-    response = await fetcher(url, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(120000), headers: { Authorization: `Bearer ${config.aiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: config.aiModel, temperature: 0, max_tokens: 4096, ...(tools.length ? { tools, tool_choice: 'auto' } : { response_format: { type: 'json_object' } }), messages }) });
-  } catch { throw new Error(`${aiLabel(config)} could not be reached or timed out. Remaining emails were left unchanged.`); }
-  if (!response.ok) throw new Error(`${aiLabel(config)} request failed (${response.status}). Check the API key, model access, and quota.`);
+    response = await fetcher(url, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(120000), headers: { Authorization: `Bearer ${config.aiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: config.aiModel, temperature: 0, max_tokens: 4096, ...(provider === 'nebius' && /nemotron/i.test(config.aiModel) ? { chat_template_kwargs: { enable_thinking: false } } : {}), ...(tools.length ? { tools, tool_choice: 'auto' } : { response_format: { type: 'json_object' } }), messages }) });
+  } catch { throw failure('AI_UNAVAILABLE', `${aiLabel(config)} could not be reached or timed out. Remaining emails were left unchanged.`); }
+  if (!response.ok) throw failure(`AI_HTTP_${response.status}`, `${aiLabel(config)} request failed (${response.status}). Check the API key, model access, and quota.`);
   try {
     const result = await response.json(); const choice = result.choices?.[0];
+    if (choice?.finish_reason === 'length') throw failure('AI_TRUNCATED', `${aiLabel(config)} reached its response limit before returning a complete decision. Cleanup stopped; remaining emails were left unchanged.`);
     if (choice?.finish_reason === 'tool_calls') {
       const calls = choice.message?.tool_calls;
       if (!tools.some(t => t.function.name === 'ask_preference') || calls?.length !== 1 || calls[0].function?.name !== 'ask_preference') throw new Error('Unsupported tool call');
@@ -32,5 +34,5 @@ export async function chatJSON(config, messages, fetcher = fetch, tools = []) {
     const parsed = JSON.parse(choice.message.content);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Expected JSON object');
     return parsed;
-  } catch { throw new Error(`${aiLabel(config)} returned an incomplete or invalid JSON decision. Remaining emails were left unchanged.`); }
+  } catch (error) { if (error.publicCode) throw error; throw failure('AI_INVALID_OUTPUT', `${aiLabel(config)} returned an incomplete or invalid JSON decision. Remaining emails were left unchanged.`); }
 }
