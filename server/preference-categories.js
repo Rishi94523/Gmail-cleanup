@@ -14,7 +14,7 @@ export function categoryScope(category) {
   const label = category.slice(6).replaceAll('_', ' ');
   return { kind: 'category', category, label: label[0].toUpperCase() + label.slice(1), scopeHash: `category:${category}` };
 }
-export function discoveryModelKey(model) { return `${model || 'default'}:category-preferences-v1`; }
+export function discoveryModelKey(model) { return `${model || 'default'}:body-topic-preferences-v2`; }
 export function validateExceptions(input) {
   if (!Array.isArray(input) || input.length > 50) throw new Error('Use up to 50 sender exceptions.');
   return input.map(rule => {

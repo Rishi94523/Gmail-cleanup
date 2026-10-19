@@ -5,7 +5,7 @@ import { ASK_PREFERENCE_TOOL } from '../server/learning.js';
 
 test('provider flag isolates keys and model settings; legacy settings apply only to OpenRouter', () => {
   const env = { NEBIUS_API_KEY: 'nebius-fixture', AI_API_KEY: 'legacy-router-fixture', AI_MODEL: 'legacy/model' };
-  assert.deepEqual(aiConfig({ ...env, AI_PROVIDER: 'nebius' }), { aiProvider: 'nebius', aiKey: 'nebius-fixture', aiModel: 'nvidia/Nemotron-3.5-Super-VL' });
+  assert.deepEqual(aiConfig({ ...env, AI_PROVIDER: 'nebius' }), { aiProvider: 'nebius', aiKey: 'nebius-fixture', aiModel: 'nvidia/Nemotron-3-Ultra-550b-a55b' });
   assert.deepEqual(aiConfig(env), { aiProvider: 'openrouter', aiKey: 'legacy-router-fixture', aiModel: 'legacy/model' });
   assert.equal(aiConfig({ ...env, OPENROUTER_API_KEY: 'preferred-fixture', OPENROUTER_MODEL: 'another/model' }).aiKey, 'preferred-fixture');
   assert.equal(aiConfig({ AI_PROVIDER: 'nebius', OPENROUTER_API_KEY: 'router-fixture' }).aiKey, '');
@@ -16,7 +16,7 @@ for (const provider of ['nebius', 'openrouter']) test(`${provider} requests use 
   let calls = 0;
   const result = await chatJSON(config, [{ role: 'user', content: 'Return JSON.' }], async (url, options) => {
     calls++;
-    assert.equal(url, provider === 'nebius' ? 'https://api.tokenfactory.us-north1.nebius.com/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions');
+    assert.equal(url, provider === 'nebius' ? 'https://api.tokenfactory.us-central1.nebius.com/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions');
     assert.equal(options.headers.Authorization, `Bearer ${config.aiKey}`);
     const body = JSON.parse(options.body); assert.equal(body.model, config.aiModel); assert.equal(body.response_format.type, 'json_object');
     for (const field of ['max_tokens', 'max_completion_tokens', 'chat_template_kwargs', 'reasoning', 'reasoning_effort']) assert.equal(Object.hasOwn(body, field), false);

@@ -14,13 +14,14 @@ try {
   const state = { connected: true, configured: true, aiConfigured: true, aiProvider: 'nebius', aiModel: 'fixture-model', schedulerActive: false, csrf: 'fixture', email: 'fixture@example.invalid', access: { tier: 'free', used: 0, remaining: 100 }, rules: { ...DEFAULT_RULES }, runs: [], subscriptions: [], totals: {}, setupMissing: [] };
   const q = (id, category, question) => ({ id, scope: { kind: 'category', category, label: category.replaceAll('_', ' ') }, version: 1, initial: true, question, reason: 'A recurring pattern in this inbox sample.', sample: { subject: 'An example email' }, options: [{ id: 'keep', label: 'Keep' }, { id: 'read', label: 'Mark read' }, { id: 'archive', label: 'Archive' }, { id: 'both', label: 'Both' }, { id: 'later', label: 'Later' }] });
   const tray = { questions: [q('unsupported-job', 'job_opportunities', 'Do you want job opportunities in your inbox?'), q('product', 'product_announcements', 'Do you want product announcements in your inbox?'), q('newsletter', 'newsletters', 'Do you want newsletters and blog updates in your inbox?')], memories: [], discovery: null };
-  let release; const discoveryGate = new Promise(resolve => { release = resolve; }); let learned = false; let ran = false;
+  let release; const discoveryGate = new Promise(resolve => { release = resolve; }); let learned = false; let ran = false; let repairRequested = false;
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname; let json;
     if (path === '/api/status') json = state;
     else if (path === '/api/mailbox') json = { unread: 20000, messages: 25000 };
     else if (path === '/api/agent/questions') json = { ...tray, questionsTotal: tray.questions.length };
     else if (path === '/api/rules') { const data = route.request().postDataJSON(); state.rules = { ...data, agent: { ...DEFAULT_PREFERENCES, ...data.agent } }; json = { rules: state.rules }; }
+    else if (path === '/api/agent/reassess-trial') { assert.equal(route.request().postDataJSON().authorize, true); repairRequested = true; state.access = { ...state.access, recoveryAvailable: false, recovering: true, remaining: 100 }; json = { status: 'ready', sampleCount: 100 }; }
     else if (path === '/api/agent/learn') { learned = true; await discoveryGate; tray.discovery = { inspected: 100, evidenceCategories: ['product_announcements', 'newsletters'], summary: 'Product updates and publications recur.', suggestions: [] }; json = tray.discovery; }
     else if (path === '/api/agent/questions/answer') {
       const data = route.request().postDataJSON(); assert.notEqual(data.questionId, 'unsupported-job');
@@ -65,6 +66,10 @@ try {
   await page.locator('#ob-start').click(); await page.getByRole('heading', { name: 'Your first fresh start.' }).waitFor(); await check('complete');
   await page.emulateMedia({ reducedMotion: 'reduce' }); assert.equal(await page.locator('.ob-content').evaluate(el => getComputedStyle(el).animationName), 'none');
   await page.locator('#ob-dashboard').click(); assert.equal(await page.locator('.sidebar').isVisible(), true);
+  state.access = { ...state.access, used: 100, remaining: 0, recoveryAvailable: true }; state.runs = [{ status: 'completed', changed: 0, created: Date.now(), kind: 'cleanup' }];
+  await page.reload(); await page.getByRole('heading', { name: 'Let’s take another look.' }).waitFor(); await check('repair-consent');
+  assert.equal(repairRequested, false); await page.locator('#ob-consent').check(); await page.locator('#ob-discover').click();
+  await page.getByRole('heading', { name: 'Your preferences, ready.' }).waitFor(); assert.equal(repairRequested, true);
   assert.deepEqual(errors, []);
   console.log('PASS consent before analysis; no sidebar or scrolling at desktop/390px/320px; animated analysis; evidence-only sequential questions; reload resumes; independent topic actions and paginated review; streamed cleanup; reduced motion; workspace after completion. Gmail/model are fixtures.');
 } finally { await browser.close(); await app.close(); }

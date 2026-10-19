@@ -12,7 +12,7 @@ import { jsonFetch } from './gmail.js';
 import { learnInbox, runAgent } from './agent.js';
 import { aiConfig } from './ai.js';
 import { learningTray, answerPreference, editMemory } from './learning.js';
-import { accessFor, requirePaid } from './access.js';
+import { accessFor, requirePaid, restartTrial } from './access.js';
 import { PREFERENCE_CATEGORIES } from './preference-categories.js';
 
 export async function createApp(options = {}) {
@@ -113,6 +113,7 @@ export async function createApp(options = {}) {
         if (url.pathname === '/api/agent/questions/answer') return json(res, 200, await answerPreference(service, id, input));
         if (url.pathname === '/api/agent/memories/edit') return json(res, 200, await editMemory(service, id, input));
         if (url.pathname === '/api/agent/learn') return json(res, 200, await service.locked(id, () => learnInbox(service, id, input.consent, input.provider)));
+        if (url.pathname === '/api/agent/reassess-trial') return json(res, 200, await service.locked(id, () => restartTrial(service, id, input.authorize)));
         if (url.pathname === '/api/agent/history') {
           const logs = await store.all("SELECT payload FROM plans WHERE account_id=? AND status='agent_log' ORDER BY created DESC LIMIT 10", id);
           return json(res, 200, { logs: logs.map(row => crypto.open(row.payload)) });

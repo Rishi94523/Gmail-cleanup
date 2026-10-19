@@ -18,10 +18,18 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
   }
   function close(page = 'overview') { active = false; root.hidden = true; document.body.classList.remove('onboarding-open'); showPage(page); }
   function intro() {
-    render(`<p class="ob-kicker">CONNECTED. NOW, LET’S GET ACQUAINTED.</p><h1>A little thinking.<br>A lighter inbox.</h1><p class="ob-copy">Your agent will look through up to 100 unread emails, find the patterns, and ask what matters to you.</p><label class="ob-consent"><input id="ob-consent" type="checkbox"><span>Allow AI to analyze my email</span></label><p class="ob-detail">${escape(provider())} receives sender and subject samples, then up to 12,000 characters per email during cleanup. No attachments. Nothing changes until you say go.</p><button class="primary ob-primary" id="ob-discover" disabled>Let my agent look →</button>`);
+    const repair = getState().access?.recoveryAvailable;
+    render(`<p class="ob-kicker">${repair ? 'YOUR EARLIER RUN MADE NO CHANGES' : 'CONNECTED. NOW, LET’S GET ACQUAINTED.'}</p><h1>${repair ? 'Let’s take another look.' : 'A little thinking.<br>A lighter inbox.'}</h1><p class="ob-copy">${repair ? 'Review the original sample with the updated agent, including emails previously left waiting. Your saved preferences stay.' : 'Your agent will read excerpts from up to 100 unread emails, find the patterns, and ask what matters to you.'}</p><label class="ob-consent"><input id="ob-consent" type="checkbox"><span>${repair ? 'Reassess my original sample with AI' : 'Allow AI to analyze my email'}</span></label><p class="ob-detail">${escape(provider())} receives sender, subject and email text excerpts. No attachments. Nothing changes until you approve your preferences and start cleanup.</p><button class="primary ob-primary" id="ob-discover" disabled>${repair ? 'Review my questions again' : 'Let my agent look'} →</button>`);
     const consent = panel.querySelector('input'); const button = panel.querySelector('button');
     consent.onchange = () => { button.disabled = !consent.checked || !getState().aiConfigured; };
-    button.onclick = () => discover();
+    button.onclick = async () => {
+      if (repair) {
+        button.disabled = true;
+        try { await request('/api/agent/reassess-trial', { authorize: true }); await refresh(); }
+        catch (error) { return fail(error); }
+      }
+      await discover();
+    };
   }
   async function discover() {
     if (working) return; working = true;
@@ -75,14 +83,14 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
       await refresh();
       await startAgent(event => {
         if (event.type === 'decision') {
-          const copy = panel.querySelector('.ob-copy'); copy.textContent = `${event.inspected} checked · ${event.changed} tidied · ${event.kept} kept`;
-          panel.querySelector('.ob-thinking-line').textContent = ({ read: 'Marked a low-priority email as read.', archive: 'Archived a low-priority email.', both: 'Marked read and archived.', keep: 'Kept an email in place.', unsubscribe: 'Submitted an approved unsubscribe request.' })[event.action] || 'Considering what matters.';
+          const copy = panel.querySelector('.ob-copy'); copy.textContent = `${event.inspected} checked · ${event.changed} tidied · ${event.kept - (event.waiting || 0)} kept${event.waiting ? ` · ${event.waiting} need review` : ''}`;
+          panel.querySelector('.ob-thinking-line').textContent = event.reason || 'Considering what matters.';
         }
         if (event.type === 'complete') complete = event;
       });
       working = false;
-      render(`<p class="ob-kicker">A LITTLE MORE HEADSPACE</p><h1>Your first fresh start.</h1><p class="ob-copy">${complete?.inspected || 0} emails checked. ${complete?.changed || 0} tidied. ${complete?.kept || 0} kept.</p><p class="ob-detail">Uncertain emails stayed put. Your preferences, activity, and undo are waiting in your workspace.</p><button class="primary ob-primary" id="ob-dashboard">Open my workspace →</button>`);
-      panel.querySelector('button').onclick = () => close();
+      render(`<p class="ob-kicker">${complete?.waiting ? 'SOME EMAILS STILL NEED YOUR INPUT' : 'CLEANUP COMPLETE'}</p><h1>${complete?.changed ? 'Your first fresh start.' : 'No emails were changed.'}</h1><p class="ob-copy">${complete?.inspected || 0} checked · ${complete?.changed || 0} tidied · ${(complete?.kept || 0) - (complete?.waiting || 0)} kept${complete?.waiting ? ` · ${complete.waiting} need review` : ''}</p><p class="ob-detail">${complete?.waiting ? 'Questions and uncertain classifications left emails untouched. See what the agent needs in your workspace.' : 'Your preferences, activity, and undo are waiting in your workspace.'}</p><button class="primary ob-primary" id="ob-dashboard">${complete?.waiting ? 'Review questions' : 'Open my workspace'} →</button>`);
+      panel.querySelector('button').onclick = () => close(complete?.waiting ? 'questions' : 'overview');
     } catch (error) { fail(error, true); }
   }
   return {
@@ -90,7 +98,8 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
     async open() {
       active = true; root.hidden = false; document.body.classList.add('onboarding-open');
       const state = getState();
-      if (state.rules.agent?.consent && state.rules.agent.consentProvider === state.aiProvider) await discover(); else intro();
+      if (state.access?.recoveryAvailable) intro();
+      else if (state.rules.agent?.consent && state.rules.agent.consentProvider === state.aiProvider) await discover(); else intro();
     }
   };
 }

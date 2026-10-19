@@ -189,7 +189,7 @@ if (auth) {
   $('#notice-banner').textContent = messages[auth] || 'Review your connection settings.'; $('#notice-banner').hidden = false;
 }
 showPage(location.hash.slice(1));
-refresh(true).then(async () => { if (state.connected && (state.access?.remaining ?? 1) > 0 && (!state.rules.agent?.enabled || (auth === 'connected' && !state.access?.used) || (state.runs[0]?.status === 'needs_review' && !state.runs[0]?.changed))) { $('#notice-banner').hidden = true; await onboarding.open(); } }).catch(err => error(`The app could not load: ${err.message}`)).finally(() => document.body.classList.remove('booting'));
+refresh(true).then(async () => { if (state.connected && (state.access?.recoveryAvailable || ((state.access?.remaining ?? 1) > 0 && (state.access?.recovering || !state.rules.agent?.enabled || (auth === 'connected' && !state.access?.used) || (state.runs[0]?.status === 'needs_review' && !state.runs[0]?.changed))))) { $('#notice-banner').hidden = true; await onboarding.open(); } }).catch(err => error(`The app could not load: ${err.message}`)).finally(() => document.body.classList.remove('booting'));
 
 const agentDefaults = { enabled: false, consent: false, consentProvider: '', keepJobs: true, coldMail: 'exceptional', keepPeople: true, keepNewsletters: true, autoUnsubscribe: false, action: 'read', exceptions: '', interests: '' };
 function providerName() { return state.aiProvider === 'nebius' ? 'Nebius Token Factory' : 'OpenRouter'; }
@@ -263,9 +263,9 @@ async function startAgent(onEvent = () => {}) {
           const labels = { keep: 'Kept', read: 'Marked read', archive: 'Archived', both: 'Read & archived', unsubscribe: 'Unsubscribe requested' };
           $('#agent-decisions').insertAdjacentHTML('afterbegin', `<div class="list-row"><div class="row-main"><strong>${escape(labels[event.action])} · ${escape(event.subject)}</strong><p>${escape(event.reason)}</p></div></div>`);
           while ($('#agent-decisions').children.length > 8) $('#agent-decisions').lastElementChild.remove();
-          $('#agent-counts').textContent = `${number(event.inspected)} read · ${number(event.changed)} changed · ${number(event.kept)} kept`;
+          $('#agent-counts').textContent = `${number(event.inspected)} read · ${number(event.changed)} changed · ${number(event.kept - (event.waiting || 0))} kept${event.waiting ? ` · ${number(event.waiting)} need review` : ""}`;
         }
-        if (event.type === 'complete') { completed = true; $('#agent-stage').textContent = event.moreAvailable ? 'Run finished. More unread mail remains.' : 'Run finished.'; $('#agent-counts').textContent = `${number(event.inspected)} inspected · ${number(event.changed)} changed · ${number(event.kept)} kept · ${number(event.unsubscribed)} unsubscribe requests`; }
+        if (event.type === 'complete') { completed = true; $('#agent-stage').textContent = event.moreAvailable ? 'Run finished. More unread mail remains.' : 'Run finished.'; $('#agent-counts').textContent = `${number(event.inspected)} inspected · ${number(event.changed)} changed · ${number(event.kept - (event.waiting || 0))} kept${event.waiting ? ` · ${number(event.waiting)} need review` : ""} · ${number(event.unsubscribed)} unsubscribe requests`; }
       }
     }
     if (!completed) throw new Error('Connection interrupted. Check Activity before starting again.');

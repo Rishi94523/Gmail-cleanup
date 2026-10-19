@@ -8,8 +8,8 @@ import { openStore } from '../server/store.js';
 import { encryption } from '../server/security.js';
 import { InboxService } from '../server/service.js';
 import { DEFAULT_RULES } from '../server/rules.js';
-import { DEFAULT_PREFERENCES, preferences, decisionFor, emailText, runAgent, learnInbox } from '../server/agent.js';
-import { accessFor } from '../server/access.js';
+import { DEFAULT_PREFERENCES, preferences, decisionFor, emailText, runAgent, learnInbox, modelDecisionBatch } from '../server/agent.js';
+import { accessFor, restartTrial, reserveFreeEmail } from '../server/access.js';
 
 function fixture(t, patch = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'inboxclean-agent-')); const store = openStore(dir); const crypto = encryption(randomBytes(32).toString('base64'));
@@ -147,5 +147,101 @@ test('discovery can invent an evidence-backed broad topic outside the examples',
     const questions = f.store.all('SELECT payload FROM agent_questions').map(q => f.crypto.open(q.payload));
     assert.equal(questions.length, 1); assert.equal(questions[0].question, 'How should I handle university notices?');
     assert.deepEqual(questions[0].options.map(o => o.id), ['keep', 'read', 'archive', 'both', 'later']);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('batched agent handles 45 approved low-priority messages in five model calls and preserves security alerts', async t => {
+  const f = fixture(t, { topicActions: true, keepPeople: false });
+  const original = structuredClone(f.mails.get('noise')); f.mails.clear();
+  for (let i = 0; i < 45; i++) f.mails.set(`promo-${i}`, { ...structuredClone(original), id: `promo-${i}` });
+  const security = { ...structuredClone(original), id: 'security' }; security.payload.headers[1].value = 'Security alert: a new sign-in'; f.mails.set('security', security);
+  f.store.run('INSERT INTO preference_memories(id,account_id,scope_hash,payload,updated) VALUES(?,?,?,?,?)', 'product-pref', f.id, 'category:product_announcements', f.crypto.seal({ scope: { kind: 'category', category: 'product_announcements', scopeHash: 'category:product_announcements' }, action: 'read', effectiveFrom: 0 }), Date.now());
+  const originalFetch = globalThis.fetch; let calls = 0; let active = 0; let peak = 0;
+  globalThis.fetch = async (_url, options) => {
+    calls++; active++; peak = Math.max(peak, active);
+    const body = JSON.parse(options.body); assert.equal(body.max_tokens, undefined);
+    const items = JSON.parse(body.messages[1].content); assert.ok(items.length <= 10);
+    await new Promise(resolve => setTimeout(resolve, 5)); active--;
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ decisions: items.map(item => ({ id: item.id, decision: { action: 'read', confidence: .94, preferenceCategory: 'product_announcements', categoryConfidence: .96, reason: 'An ordinary promotion in the topic you approved.' } })) }) } }] });
+  };
+  try {
+    const result = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard));
+    assert.equal(result.changed, 45); assert.equal(result.kept, 1); assert.equal(calls, 5); assert.equal(peak, 2);
+    assert.ok(f.mails.get('security').labelIds.includes('UNREAD'));
+    assert.equal((await accessFor(f.service, f.id)).used, 46);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('incomplete model batch cannot modify any message in that window', async t => {
+  const f = fixture(t, { keepPeople: false }); const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ decisions: [{ id: 'invented-id', decision: { action: 'read', confidence: 1, reason: 'Must not apply' } }] }) } }] });
+  try {
+    const result = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard));
+    assert.ok(result.waiting > 0);
+    assert.equal(f.writes.length, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('one explicit reassessment revisits only the original zero-change trial without resetting lifetime usage', async t => {
+  const f = fixture(t, { keepPeople: false });
+  await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', async () => ({ action: 'keep', confidence: 1, reason: 'Kept during the earlier run' })));
+  assert.equal((await accessFor(f.service, f.id)).recoveryAvailable, true);
+  await assert.rejects(restartTrial(f.service, f.id, false), /Authorize/);
+  const used = (await accessFor(f.service, f.id)).used;
+  f.store.run('INSERT INTO agent_holds(account_id,message_id,scope_hash,created) VALUES(?,?,?,?)', f.id, 'noise', 'category:product_announcements', Date.now());
+  await f.service.locked(f.id, () => restartTrial(f.service, f.id, true));
+  assert.equal(f.store.get('SELECT count(*) AS n FROM agent_holds').n, 0);
+  assert.equal((await accessFor(f.service, f.id)).used, used);
+  assert.equal(await reserveFreeEmail(f.service, f.id, 'outside-original-sample', true), false);
+  f.mails.set('later', { ...structuredClone(f.mails.get('noise')), id: 'later' });
+  const result = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', f.infer));
+  assert.ok(result.changed > 0); assert.ok(f.mails.get('later').labelIds.includes('UNREAD'));
+  assert.equal((await accessFor(f.service, f.id)).used, used);
+  assert.equal((await accessFor(f.service, f.id)).recoveryAvailable, false);
+  await assert.rejects(restartTrial(f.service, f.id, true), /not available/);
+});
+
+test('HTML-only mail is readable as text without scripts, styles, or attachments', () => {
+  const payload = { mimeType: 'text/html', body: { data: Buffer.from('<style>hidden styles</style><script>hidden code</script><p>New features &amp; updates</p>').toString('base64url') } };
+  assert.equal(emailText(payload), 'New features & updates');
+});
+
+test('grouped discovery preserves evidence through alias mapping and topic selection', async t => {
+  const f = fixture(t, { topicActions: true }); const original = structuredClone(f.mails.get('noise')); f.mails.clear();
+  for (let i = 0; i < 100; i++) { const message = { ...structuredClone(original), id: `opaque-${i}` }; message.payload.headers[1].value = i < 50 ? 'Weekend sale and discounts' : 'Weekly newsletter digest'; f.mails.set(message.id, message); }
+  const originalFetch = globalThis.fetch; let calls = 0;
+  globalThis.fetch = async (_url, options) => {
+    calls++; const input = JSON.parse(JSON.parse(options.body).messages[1].content);
+    const result = input[0].candidateId ? { selected: ['question_1', 'question_3'] } : { summary: 'Recurring topics.', questions: [{ messageId: input[0].id, category: input[0].subject.includes('sale') ? 'sales_discounts' : 'newsletters', question: 'How should I handle offers from this particular brand?', reason: 'This is a recurring topic in this part of the sample.', evidenceQuote: input[0].subject }] };
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(result) } }] });
+  };
+  try {
+    await learnInbox(f.service, f.id, true, 'openrouter');
+    const questions = f.store.all('SELECT payload FROM agent_questions').map(row => f.crypto.open(row.payload));
+    assert.equal(calls, 5); assert.equal(questions.length, 2);
+    assert.ok(questions.every(question => !question.question.includes('brand')));
+    assert.deepEqual(questions.map(q => q.scope.category).sort(), ['newsletters', 'sales_discounts']);
+    assert.ok(questions.every(q => ['Weekend sale and discounts', 'Weekly newsletter digest'].includes(q.sample.subject)));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('batch preference proposal beside the id normalizes to a question, never a mailbox action', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ decisions: [{ id: 'email_1', requestPreference: { category: 'product_announcements', question: 'How should I handle announcements?', reason: 'Preference unknown' } }] }) } }] });
+  try {
+    const result = await modelDecisionBatch({ aiKey: 'fixture' }, 'Decide from saved preferences.', [{ id: 'opaque-gmail-id' }]);
+    assert.equal(result.get('opaque-gmail-id').requestPreference.category, 'product_announcements');
+    assert.equal(result.get('opaque-gmail-id').action, undefined);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('duplicate and missing batch entries keep only affected messages; unknown ids cannot authorize writes', async () => {
+  const originalFetch = globalThis.fetch;
+  const decision = { action: 'read', confidence: .99, reason: 'Low-priority promotion' };
+  globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ decisions: [null, { id: 'email_1', decision }, { id: 'email_1', decision }, { id: 'email_2', decision }, { id: 'invented', decision }] }) } }] });
+  try {
+    const result = await modelDecisionBatch({ aiKey: 'fixture' }, 'Decide from saved preferences.', [{ id: 'first' }, { id: 'second' }, { id: 'missing' }]);
+    assert.equal(result.get('first').action, 'keep'); assert.equal(result.get('second').action, 'read'); assert.equal(result.get('missing').action, 'keep');
+    assert.equal(result.has('invented'), false);
   } finally { globalThis.fetch = originalFetch; }
 });

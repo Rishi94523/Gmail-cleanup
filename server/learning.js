@@ -38,7 +38,9 @@ export async function askPreference(service, id, message, p, args, { initial = f
     if (memory) return { id: old?.id || null, status: 'already_learned' };
     const questionId = old?.id || randomUUID();
     const fallback = PREFERENCE_CATEGORIES[args.category]?.question || `How should I handle ${scope.label.toLowerCase()}?`;
-    const wording = authored ? (args.question.length <= 110 && /^how\b/i.test(args.question) && !/@|https?:|www\.|[<>\r\n]/i.test(args.question) ? args.question : `How should I handle ${scope.label.toLowerCase()}?`) : fallback;
+    // The model chooses topics and evidence; category wording keeps questions
+    // broad instead of letting a cited sender turn into a brand-specific rule.
+    const wording = authored ? `How should I handle ${scope.label.toLowerCase()}?` : fallback;
     const payload = service.crypto.seal({ question: wording, reason: args.reason, scope, initial, options: choicesFor(p, scope).map(o => initial ? { ...o, label: o.label.replace('future low-priority mail', 'low-priority emails in this first cleanup') } : o), sample: { subject: headersOf(message).subject || '(No subject)' } });
     if (old) await tx.run("UPDATE agent_questions SET payload=?,status='pending',version=version+1,updated=?,deferred_at=?,snoozed_until=0 WHERE id=? AND account_id=?", payload, now, now + 30000, questionId, id);
     else await tx.run("INSERT INTO agent_questions(id,account_id,scope_hash,payload,status,created,updated,deferred_at) VALUES(?,?,?,?,'pending',?,?,?)", questionId, id, scope.scopeHash, payload, now, now, now + 30000);

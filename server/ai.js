@@ -7,7 +7,7 @@ export function aiConfig(env = process.env) {
   return {
     aiProvider,
     aiKey: (aiProvider === 'nebius' ? env.NEBIUS_API_KEY : (env.OPENROUTER_API_KEY || env.AI_API_KEY))?.trim() || '',
-    aiModel: (aiProvider === 'nebius' ? env.NEBIUS_MODEL : (env.OPENROUTER_MODEL || env.AI_MODEL))?.trim() || (aiProvider === 'nebius' ? 'nvidia/Nemotron-3.5-Super-VL' : 'google/gemini-2.5-flash')
+    aiModel: (aiProvider === 'nebius' ? env.NEBIUS_MODEL : (env.OPENROUTER_MODEL || env.AI_MODEL))?.trim() || (aiProvider === 'nebius' ? 'nvidia/Nemotron-3-Ultra-550b-a55b' : 'google/gemini-2.5-flash')
   };
 }
 export function aiLabel(config) { return config.aiProvider === 'nebius' ? 'Nebius Token Factory' : 'OpenRouter'; }
@@ -16,7 +16,8 @@ export async function chatJSON(config, messages, fetcher = fetch, tools = []) {
   const provider = config.aiProvider || 'openrouter';
   if (!['openrouter', 'nebius'].includes(provider)) throw new Error('Unsupported AI provider.');
   if (!config.aiKey) throw new Error(missingAIKey(config));
-  const url = provider === 'nebius' ? 'https://api.tokenfactory.us-north1.nebius.com/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions';
+  const region = /^nvidia\/Nemotron-3-Ultra-/i.test(config.aiModel) ? 'us-central1' : 'us-north1';
+  const url = provider === 'nebius' ? `https://api.tokenfactory.${region}.nebius.com/v1/chat/completions` : 'https://openrouter.ai/api/v1/chat/completions';
   let response;
   try {
     // Let the provider choose its output budget and the model use its default reasoning.
@@ -25,7 +26,10 @@ export async function chatJSON(config, messages, fetcher = fetch, tools = []) {
   if (!response.ok) throw failure(`AI_HTTP_${response.status}`, `${aiLabel(config)} request failed (${response.status}). Check the API key, model access, and quota.`);
   try {
     const result = await response.json(); const choice = result.choices?.[0];
-    if (choice?.finish_reason === 'length') throw failure('AI_TRUNCATED', `${aiLabel(config)} reached its response limit before returning a complete decision. Cleanup stopped; remaining emails were left unchanged.`);
+    if (choice?.finish_reason === 'length') {
+      console.warn(JSON.stringify({ event: 'ai_truncated', provider, model: config.aiModel, completionTokens: result.usage?.completion_tokens }));
+      throw failure('AI_TRUNCATED', `${aiLabel(config)} reached its response limit before returning a complete decision. Cleanup stopped; remaining emails were left unchanged.`);
+    }
     if (choice?.finish_reason === 'tool_calls') {
       const calls = choice.message?.tool_calls;
       if (!tools.some(t => t.function.name === 'ask_preference') || calls?.length !== 1 || calls[0].function?.name !== 'ask_preference') throw new Error('Unsupported tool call');
