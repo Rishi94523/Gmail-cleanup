@@ -11,7 +11,7 @@ import { InboxService } from './service.js';
 import { jsonFetch } from './gmail.js';
 import { learnInbox, runAgent } from './agent.js';
 import { aiConfig } from './ai.js';
-import { learningTray, answerPreference, editMemory } from './learning.js';
+import { learningTray, answerPreference, editMemory, interpretPreference } from './learning.js';
 import { accessFor, requirePaid, restartTrial } from './access.js';
 import { PREFERENCE_CATEGORIES } from './preference-categories.js';
 
@@ -27,7 +27,7 @@ export async function createApp(options = {}) {
   const ready = Boolean(crypto && config.clientId && config.clientSecret);
   const service = crypto ? new InboxService(store, crypto, config, options.clientFactory) : null;
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
-  const assets = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/onboarding.js', ['onboarding.js', 'text/javascript']], ['/onboarding.css', ['onboarding.css', 'text/css']]]);
+  const assets = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/onboarding.js', ['onboarding.js', 'text/javascript']], ['/onboarding.css', ['onboarding.css', 'text/css']], ['/preference-answer.js', ['preference-answer.js', 'text/javascript']]]);
   function cookie(value, maxAge = 2592000) { return `inboxclean_session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${origin.startsWith('https:') ? '; Secure' : ''}`; }
   function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); }
   function redirect(res, to) { res.writeHead(302, { Location: to }); res.end(); }
@@ -111,6 +111,7 @@ export async function createApp(options = {}) {
         if (req.headers.origin !== origin || req.headers['x-csrf-token'] !== session.csrf || !req.headers['content-type']?.startsWith('application/json')) return json(res, 403, { error: 'Request could not be verified. Reload the app and try again.' });
         const input = await body(req);
         if (url.pathname === '/api/agent/questions/answer') return json(res, 200, await answerPreference(service, id, input));
+        if (url.pathname === '/api/agent/questions/interpret') return json(res, 200, await service.locked(id, () => interpretPreference(service, id, input)));
         if (url.pathname === '/api/agent/memories/edit') return json(res, 200, await editMemory(service, id, input));
         if (url.pathname === '/api/agent/learn') return json(res, 200, await service.locked(id, () => learnInbox(service, id, input.consent, input.provider)));
         if (url.pathname === '/api/agent/reassess-trial') return json(res, 200, await service.locked(id, () => restartTrial(service, id, input.authorize)));

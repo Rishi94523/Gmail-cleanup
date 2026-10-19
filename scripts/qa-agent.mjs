@@ -28,11 +28,12 @@ try {
       assert.equal(route.request().postDataJSON().consent, true); learned = true; json = { inspected: 100, summary: 'Your inbox includes job opportunities.', suggestions: [{ topic: 'jobs', note: 'Would you like to keep recruiting emails?' }] };
       tray.discovery = json; tray.questionsTotal = 1; tray.questions = [{ id: 'question-one', version: 1, question: 'Do you want product announcements in your inbox?', reason: 'These might be unwanted signup marketing.', scope: { kind: 'category', category: 'product_announcements', label: 'Product announcements' }, sample: { subject: 'A new product announcement' }, options: [{ id: 'keep', label: 'Keep these in my inbox' }, { id: 'read', label: 'Mark future low-priority mail as read' }, { id: 'later', label: 'Ask me tomorrow' }] }];
     }
+    else if (path === '/api/agent/questions/interpret') { const answer = route.request().postDataJSON(); json = { supported: true, action: 'read', minAgeDays: 90, instructions: answer.text }; }
     else if (path === '/api/agent/questions/answer') {
-      const answer = route.request().postDataJSON(); assert.equal(answer.option, 'read');
-      tray.memories = [{ id: 'memory-one', version: 1, action: answer.option, scope: tray.questions[0].scope, explanation: tray.questions[0].question }]; tray.questions = []; tray.questionsTotal = 0; json = { status: 'saved' };
+      const answer = route.request().postDataJSON(); assert.equal(answer.option, 'custom'); assert.equal(answer.action, 'read');
+      tray.memories = [{ id: 'memory-one', version: 1, action: answer.action, minAgeDays: answer.minAgeDays, instructions: answer.instructions, scope: tray.questions[0].scope, explanation: tray.questions[0].question }]; tray.questions = []; tray.questionsTotal = 0; json = { status: 'saved' };
     }
-    else if (path === '/api/agent/memories/edit') { const change = route.request().postDataJSON(); tray.memories[0].action = change.action; tray.memories[0].version++; json = { status: 'saved' }; }
+    else if (path === '/api/agent/memories/edit') { const change = route.request().postDataJSON(); Object.assign(tray.memories[0], { action: change.action, minAgeDays: change.minAgeDays, instructions: change.instructions }); tray.memories[0].version++; json = { status: 'saved' }; }
     else if (path === '/api/rules') { state.rules = route.request().postDataJSON(); json = { rules: state.rules }; }
     else if (path === '/api/agent/history') json = { logs: [{ decisions: [{ subject: 'Sale', action: 'read', reason: 'Low priority' }] }] };
     else throw new Error(`Unexpected request ${path}`);
@@ -57,12 +58,18 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Mobile questions overflow');
   await page.screenshot({ path: resolve(output, 'questions-mobile.png'), fullPage: true });
-  await page.getByLabel('Mark future low-priority mail as read', { exact: true }).check();
-  await page.getByRole('button', { name: 'Save my answer' }).click(); await page.waitForFunction(() => document.querySelector('#question-count').textContent === '0');
+  await page.getByRole('button', { name: 'Or write my own answer' }).click();
+  await page.getByRole('textbox', { name: 'Your written preference' }).fill('Mark these read after 90 days, except Apple announcements.');
+  await page.getByRole('button', { name: /Understand my answer/ }).click(); await page.locator('.custom-summary').waitFor(); assert.equal(tray.memories.length, 0);
+  await page.getByRole('button', { name: /Save this preference/ }).click(); await page.waitForFunction(() => document.querySelector('#question-count').textContent === '0');
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();
+  assert.equal(await page.locator('#learned-preferences [name=minAgeDays]').inputValue(), '90');
+  await page.locator('#learned-preferences [name=instructions]').fill('Keep Apple and Mozilla announcements.');
+  await page.locator('#learned-preferences [name=minAgeDays]').fill('180');
   await page.locator('#learned-preferences select').selectOption('keep'); await page.locator('#learned-preferences button[type=submit]').click();
   await page.waitForFunction(() => document.querySelector('#learned-preferences small').textContent.includes('Version 2'));
   assert.equal(tray.memories[0].action, 'keep');
+  assert.equal(tray.memories[0].minAgeDays, 180); assert.match(tray.memories[0].instructions, /Mozilla/);
   await page.locator('#exception-value').fill('apple.com');
   await page.locator('#exception-category').selectOption('product_announcements'); await page.locator('#exception-action').selectOption('read');
   await page.locator('#exception-save').click(); await page.waitForSelector('#sender-exceptions [data-remove-exception]');

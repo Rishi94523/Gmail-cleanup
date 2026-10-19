@@ -23,10 +23,11 @@ try {
     else if (path === '/api/rules') { const data = route.request().postDataJSON(); state.rules = { ...data, agent: { ...DEFAULT_PREFERENCES, ...data.agent } }; json = { rules: state.rules }; }
     else if (path === '/api/agent/reassess-trial') { assert.equal(route.request().postDataJSON().authorize, true); repairRequested = true; state.access = { ...state.access, recoveryAvailable: false, recovering: true, remaining: 100 }; json = { status: 'ready', sampleCount: 100 }; }
     else if (path === '/api/agent/learn') { learned = true; await discoveryGate; tray.discovery = { inspected: 100, evidenceCategories: ['product_announcements', 'newsletters'], summary: 'Product updates and publications recur.', suggestions: [] }; json = tray.discovery; }
+    else if (path === '/api/agent/questions/interpret') { const data = route.request().postDataJSON(); assert.match(data.text, /90 days/); json = { supported: true, action: 'archive', minAgeDays: 90, instructions: data.text }; }
     else if (path === '/api/agent/questions/answer') {
       const data = route.request().postDataJSON(); assert.notEqual(data.questionId, 'unsupported-job');
       const item = tray.questions.find(q => q.id === data.questionId); tray.questions = tray.questions.filter(q => q !== item);
-      tray.memories.push({ id: item.id, version: 1, scope: item.scope, sourceQuestion: item.id, initialSampleIds: ['sample'], action: data.option, explanation: item.question }); if (item.id === 'newsletter') for (const label of ['University notices', 'Community discussions', 'Travel offers', 'Delivery updates']) tray.memories.push({ id: label, version: 1, scope: { kind: 'category', category: `topic_${label.toLowerCase().replaceAll(' ', '_')}`, label }, action: 'read', initialSampleIds: ['sample'] }); json = { status: 'saved' };
+      tray.memories.push({ id: item.id, version: 1, scope: item.scope, sourceQuestion: item.id, initialSampleIds: ['sample'], action: data.option === 'custom' ? data.action : data.option, minAgeDays: data.minAgeDays || 0, instructions: data.instructions || '', explanation: item.question }); if (item.id === 'newsletter') for (const label of ['University notices', 'Community discussions', 'Travel offers', 'Delivery updates']) tray.memories.push({ id: label, version: 1, scope: { kind: 'category', category: `topic_${label.toLowerCase().replaceAll(' ', '_')}`, label }, action: 'read', initialSampleIds: ['sample'] }); json = { status: 'saved' };
     } else if (path === '/api/agent/memories/edit') { const data = route.request().postDataJSON(); const memory = tray.memories.find(m => m.id === data.memoryId); memory.action = data.action; memory.version++; json = { status: 'saved' }; }
     else if (path === '/api/agent/run') {
       ran = true; assert.equal(state.rules.agent.topicActions, true); assert.equal(tray.memories.find(m => m.id === 'product').action, 'archive'); assert.equal(tray.memories.find(m => m.id === 'newsletter').action, 'read'); assert.equal(state.rules.agent.autoUnsubscribe, false);
@@ -53,7 +54,11 @@ try {
   await page.getByRole('heading', { name: 'Getting to know your inbox.' }).waitFor(); await check('thinking');
   release(); await page.getByRole('heading', { name: 'Do you want product announcements in your inbox?' }).waitFor();
   assert.equal(await page.locator('#onboarding h1').count(), 1); await check('question');
-  await page.locator('#onboarding input[value=archive]').check(); await page.locator('#ob-question button').click();
+  await page.getByRole('button', { name: 'Or write my own answer' }).click(); await check('written-answer');
+  await page.getByRole('textbox', { name: 'Your written preference' }).fill('Archive product announcements after 90 days, but keep Apple announcements.');
+  await page.getByRole('button', { name: /Understand my answer/ }).click(); await page.locator('.custom-summary').waitFor(); await check('written-preview');
+  assert.equal(tray.memories.length, 0, 'Interpretation must not save a preference');
+  await page.getByRole('button', { name: /Save this preference/ }).click();
   await page.getByRole('heading', { name: 'Do you want newsletters and blog updates in your inbox?' }).waitFor();
   await page.reload(); await page.getByRole('heading', { name: 'Do you want newsletters and blog updates in your inbox?' }).waitFor();
   await page.locator('#onboarding input[value=read]').check(); await page.locator('#ob-question button').click();

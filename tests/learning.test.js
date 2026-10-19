@@ -9,7 +9,7 @@ import { encryption } from '../server/security.js';
 import { InboxService } from '../server/service.js';
 import { DEFAULT_RULES } from '../server/rules.js';
 import { DEFAULT_PREFERENCES, runAgent } from '../server/agent.js';
-import { askPreference, answerPreference, editMemory, learningTray, scopeFor } from '../server/learning.js';
+import { askPreference, answerPreference, editMemory, learningTray, scopeFor, interpretPreference } from '../server/learning.js';
 import { unsubscribeEligible, automaticUnsubscribe } from '../server/subscription-agent.js';
 import { chatJSON } from '../server/ai.js';
 import { categoryScope, matchingException, validateExceptions } from '../server/preference-categories.js';
@@ -34,6 +34,44 @@ function fixture(t) {
   return { id, store, crypto, rules, messages, service: new InboxService(store, crypto, { aiKey: 'fixture-only', aiProvider: 'openrouter' }, () => gmail), writes: () => writes };
 }
 const args = { category: 'product_announcements', question: 'Do you want updates from this product?', reason: 'Your subscription intent is unclear.' };
+
+test('written answers are interpreted without saving, then explicitly confirmed and remain editable', async t => {
+  const f = fixture(t); const created = await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args, { initial: true });
+  const row = f.store.get('SELECT version FROM agent_questions WHERE id=?', created.id); const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ supported: true, action: 'read', minAgeDays: 90 }) } }] });
+  try {
+    const text = 'Mark these read after 90 days, but keep announcements from Apple.';
+    const proposal = await interpretPreference(f.service, f.id, { questionId: created.id, version: row.version, text });
+    assert.equal(proposal.action, 'read'); assert.equal(proposal.minAgeDays, 90); assert.equal(proposal.instructions, text);
+    assert.equal(f.store.get('SELECT count(*) AS n FROM preference_memories').n, 0); assert.equal(f.writes(), 0);
+    await answerPreference(f.service, f.id, { questionId: created.id, version: row.version, option: 'custom', ...proposal });
+    let tray = await learningTray(f.service, f.id); assert.equal(tray.memories[0].instructions, text); assert.equal(tray.memories[0].minAgeDays, 90);
+    await editMemory(f.service, f.id, { memoryId: tray.memories[0].id, version: tray.memories[0].version, action: 'read', minAgeDays: 180, instructions: 'Keep Apple and Mozilla announcements.' });
+    tray = await learningTray(f.service, f.id); assert.equal(tray.memories[0].minAgeDays, 180); assert.match(tray.memories[0].instructions, /Mozilla/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('typed answers cannot authorize unsupported actions or relax the minimum age for sensitive notices', async t => {
+  const f = fixture(t); const created = await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, { ...args, category: 'bank_transactions' });
+  const row = f.store.get('SELECT version FROM agent_questions WHERE id=?', created.id);
+  await assert.rejects(answerPreference(f.service, f.id, { questionId: created.id, version: row.version, option: 'custom', action: 'delete', instructions: 'Delete them', minAgeDays: 90 }), /offered/);
+  await assert.rejects(answerPreference(f.service, f.id, { questionId: created.id, version: row.version, option: 'custom', action: 'read', instructions: 'Read them immediately', minAgeDays: 0 }), /30 to 3650/);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ supported: false, clarification: 'Should these be marked read or archived?' }) } }] });
+  try {
+    const result = await interpretPreference(f.service, f.id, { questionId: created.id, version: row.version, text: 'These are usually noise.' });
+    assert.equal(result.supported, false); assert.equal(f.store.get('SELECT count(*) AS n FROM preference_memories').n, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('a broad age-based question discovered midway is queued once while matching emails remain untouched', async t => {
+  const f = fixture(t);
+  for (const message of f.messages.values()) { message.internalDate = String(Date.now() - 120 * 86400000); message.payload.headers.find(header => header.name === 'Subject').value = 'Bank transaction confirmation'; }
+  const infer = async () => ({ requestPreference: { category: 'bank_transactions', question: 'How should I handle older bank notices?', reason: 'A recurring pattern of old confirmations needs your preference.', minAgeDays: 90 } });
+  await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', infer));
+  const tray = await learningTray(f.service, f.id); assert.equal(tray.questions.length, 1); assert.equal(tray.questions[0].minAgeDays, 90);
+  assert.equal(f.writes(), 0); assert.equal(f.store.get('SELECT count(*) AS n FROM agent_holds').n, 2);
+});
 
 test('initial setup answers authorize the saved sample without releasing later held mail', async t => {
   const f = fixture(t);

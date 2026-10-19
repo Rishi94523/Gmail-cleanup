@@ -2,6 +2,12 @@
 
 Use Postgres as the source of truth, not model conversation history or embeddings. Answers must be explicit, scoped, editable, and traceable. A restart or a different Cloud Run instance must see the same state.
 
+Each topic also stores `minAgeDays` and the user's original written `instructions` in its encrypted memory. Users may choose an action directly or write an answer. The interpretation endpoint proposes a supported action and age without saving anything; the UI previews these and the original text before an explicit confirmation saves the preference. Ambiguous or unsupported requests ask for clarification. Written conditions and age thresholds remain editable in the Questions workspace and are sent with the topic action for subsequent decisions.
+
+Discovery includes normalized sender addresses, Date-header `sentAt`, Gmail `receivedAt`, received-age days, and the current clock/timezone. Only the Gmail timestamp is trusted to enforce age. Older routine bank/login notices use canonical `bank_transactions` and `security_notices` topics, an explicit age threshold of at least 30 days, and the model's `routineNotice=true` decision. Recent, suspicious/unresolved, starred/important and other protected messages stay unchanged. An old sender-controlled Date header cannot make a recent notice eligible. These notices are never automatically unsubscribed.
+
+The model may call `ask_preference` during cleanup, including an optional per-topic `minAgeDays`. Matching mail stays held and the broad question is deduplicated in the tray; the agent does not wait for an answer or retroactively release the held messages. A review count refers to emails awaiting preferences or confident classification, not the number of questions.
+
 ## Stored state
 
 | State | Purpose |

@@ -245,3 +245,46 @@ test('duplicate and missing batch entries keep only affected messages; unknown i
     assert.equal(result.has('invented'), false);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test('older routine bank/login notices obey their own age and written preferences; recent and unresolved alerts stay', async t => {
+  const f = fixture(t, { topicActions: true, keepPeople: false });
+  const base = structuredClone(f.mails.get('noise')); f.mails.clear();
+  const add = (id, days, subject, extra = {}) => {
+    const message = { ...structuredClone(base), id, internalDate: days === null ? 'invalid' : String(Date.now() - days * 86400000), ...extra };
+    message.payload.headers = [{ name: 'From', value: 'Account notices <notices@bank.example>' }, { name: 'Subject', value: subject }, { name: 'Date', value: 'Mon, 1 Jan 2001 12:00:00 +0000' }];
+    f.mails.set(id, message);
+  };
+  add('old-bank', 120, 'Bank transaction confirmation'); add('new-bank', 10, 'Bank transaction confirmation'); add('not-old-enough', 60, 'Bank transaction confirmation');
+  add('old-login', 120, 'Login confirmation'); add('current-login', 1, 'Login confirmation'); add('fraud', 120, 'Suspicious bank transaction');
+  add('ambiguous', 120, 'Bank transaction detail'); add('undated', null, 'Bank transaction confirmation');
+  for (const [category, minAgeDays] of [['bank_transactions', 90], ['security_notices', 60]]) {
+    f.store.run('INSERT INTO preference_memories(id,account_id,scope_hash,payload,updated) VALUES(?,?,?,?,?)', category, f.id, `category:${category}`, f.crypto.seal({ scope: { kind: 'category', category, scopeHash: `category:${category}`, minimumAgeDays: 30 }, action: 'read', minAgeDays, instructions: 'Keep unusual activity alerts.', effectiveFrom: 0 }), Date.now());
+  }
+  let calls = 0;
+  const infer = async (_config, _prompt, input) => {
+    calls++; assert.ok(input.currentClock.currentDate); assert.equal(input.fromAddress, 'notices@bank.example'); assert.ok(input.sender.includes('@bank.example')); assert.equal(input.sentAt, '2001-01-01T12:00:00.000Z');
+    assert.equal(input.categoryPreferences.find(memory => memory.scope.category === 'bank_transactions').instructions, 'Keep unusual activity alerts.');
+    return { action: 'read', confidence: .99, preferenceCategory: input.sensitiveNoticeCategory, categoryConfidence: .99, routineNotice: input.subject !== 'Bank transaction detail', reason: 'Routine historical confirmation.' };
+  };
+  const result = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', infer));
+  assert.equal(result.changed, 2); assert.equal(calls, 4);
+  for (const id of ['old-bank', 'old-login']) assert.ok(!f.mails.get(id).labelIds.includes('UNREAD'));
+  for (const id of ['new-bank', 'not-old-enough', 'current-login', 'fraud', 'ambiguous', 'undated']) assert.ok(f.mails.get(id).labelIds.includes('UNREAD'));
+});
+
+test('discovery supplies from address, sent/received dates, trustworthy age and the current clock', async t => {
+  const f = fixture(t); const old = f.mails.get('noise'); old.internalDate = String(Date.now() - 120 * 86400000); old.payload.headers[1].value = 'Bank transaction confirmation';
+  old.payload.headers.push({ name: 'Date', value: 'Mon, 1 Jan 2001 12:00:00 +0000' });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body); assert.match(body.messages[0].content, /Current clock:.*currentDate/);
+    const sample = JSON.parse(body.messages[1].content); const email = sample.find(item => item.subject === 'Bank transaction confirmation');
+    assert.equal(email.fromAddress, 'noise@example.invalid'); assert.equal(email.sentAt, '2001-01-01T12:00:00.000Z'); assert.ok(email.ageDays >= 120 && email.ageDays < 121);
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ questions: [{ messageId: email.id, category: 'bank_transactions', minAgeDays: 90, question: 'How should I handle old bank confirmations?', reason: 'Routine bank notices are several months old.', evidenceQuote: email.subject }] }) } }] });
+  };
+  try {
+    await learnInbox(f.service, f.id, true, 'openrouter');
+    const question = f.crypto.open(f.store.get('SELECT payload FROM agent_questions').payload);
+    assert.match(question.question, /older than 90 days/); assert.equal(question.minAgeDays, 90);
+  } finally { globalThis.fetch = originalFetch; }
+});

@@ -7,7 +7,7 @@ export function aiConfig(env = process.env) {
   return {
     aiProvider,
     aiKey: (aiProvider === 'nebius' ? env.NEBIUS_API_KEY : (env.OPENROUTER_API_KEY || env.AI_API_KEY))?.trim() || '',
-    aiModel: (aiProvider === 'nebius' ? env.NEBIUS_MODEL : (env.OPENROUTER_MODEL || env.AI_MODEL))?.trim() || (aiProvider === 'nebius' ? 'nvidia/Nemotron-3-Ultra-550b-a55b' : 'google/gemini-2.5-flash')
+    aiModel: (aiProvider === 'nebius' ? env.NEBIUS_MODEL : (env.OPENROUTER_MODEL || env.AI_MODEL))?.trim() || (aiProvider === 'nebius' ? 'nvidia/Nemotron-3.5-Super-VL' : 'google/gemini-2.5-flash')
   };
 }
 export function aiLabel(config) { return config.aiProvider === 'nebius' ? 'Nebius Token Factory' : 'OpenRouter'; }

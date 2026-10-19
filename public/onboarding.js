@@ -1,3 +1,4 @@
+import { writePreference } from './preference-answer.js';
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 export function createOnboarding({ getState, request, refresh, startAgent, showPage }) {
@@ -55,13 +56,19 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
       try { await request('/api/agent/questions/answer', { questionId: question.id, version: question.version, option: new FormData(event.target).get('answer') }); answered++; working = false; await nextQuestion(); }
       catch (error) { fail(error); }
     };
+    const write = document.createElement('button'); write.type = 'button'; write.className = 'text-button ob-write-answer'; write.textContent = 'Or write my own answer';
+    panel.querySelector('form').after(write);
+    write.onclick = () => {
+      write.remove(); const form = panel.querySelector('form'); const container = document.createElement('div'); form.replaceWith(container);
+      writePreference(container, { question, request, onSaved: async () => { answered++; await nextQuestion(); }, onCancel: () => nextQuestion().catch(fail) });
+    };
   }
   async function review() {
     const tray = await request('/api/agent/questions');
     const memories = tray.memories.filter(m => m.scope.kind === 'category');
     const labels = { keep: 'Keep in inbox', read: 'Mark as read', archive: 'Archive', both: 'Read & archive' };
     const visible = memories.slice(reviewPage * 3, reviewPage * 3 + 3);
-    render(`<p class="ob-kicker">A DIFFERENT CHOICE FOR EACH TOPIC</p><h1>Your preferences, ready.</h1><p class="ob-copy">Each topic follows its own action. Important, uncertain, and unclassified mail stays.</p><div class="ob-topic-summary">${visible.length ? visible.map(m => `<label class="ob-topic-row"><span>${escape(m.scope.label)}</span><select data-memory="${escape(m.id)}" aria-label="Action for ${escape(m.scope.label)}">${Object.entries(labels).map(([value,label]) => `<option value="${value}" ${m.action === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>`).join('') : '<p class="ob-detail">No topic preferences yet. The agent will leave uncertain mail untouched.</p>'}</div>${memories.length > 3 ? `<div class="ob-pagination"><button type="button" id="ob-prev" ${reviewPage === 0 ? 'disabled' : ''}>Previous topics</button><span>${reviewPage + 1} / ${Math.ceil(memories.length / 3)}</span><button type="button" id="ob-next" ${(reviewPage + 1) * 3 >= memories.length ? 'disabled' : ''}>Next topics</button></div>` : ''}<button class="primary ob-primary" id="ob-start">${getState().access?.used ? `Clean remaining ${getState().access.remaining}` : 'Clean my first 100'} →</button><p class="ob-detail">Nothing deleted. Changes can be undone.</p>`);
+    render(`<p class="ob-kicker">A DIFFERENT CHOICE FOR EACH TOPIC</p><h1>Your preferences, ready.</h1><p class="ob-copy">Each topic follows its own action. Important, uncertain, and unclassified mail stays.</p><div class="ob-topic-summary">${visible.length ? visible.map(m => `<label class="ob-topic-row"><span>${escape(m.scope.label)}${m.minAgeDays ? `<small>Only after ${m.minAgeDays} days</small>` : ''}</span><select data-memory="${escape(m.id)}" aria-label="Action for ${escape(m.scope.label)}">${Object.entries(labels).map(([value,label]) => `<option value="${value}" ${m.action === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>`).join('') : '<p class="ob-detail">No topic preferences yet. The agent will leave uncertain mail untouched.</p>'}</div>${memories.length > 3 ? `<div class="ob-pagination"><button type="button" id="ob-prev" ${reviewPage === 0 ? 'disabled' : ''}>Previous topics</button><span>${reviewPage + 1} / ${Math.ceil(memories.length / 3)}</span><button type="button" id="ob-next" ${(reviewPage + 1) * 3 >= memories.length ? 'disabled' : ''}>Next topics</button></div>` : ''}<button class="primary ob-primary" id="ob-start">${getState().access?.used ? `Clean remaining ${getState().access.remaining}` : 'Clean my first 100'} →</button><p class="ob-detail">Nothing deleted. Changes can be undone.</p>`);
     panel.querySelectorAll('select').forEach(select => { select.onchange = async () => {
       if (working) return; working = true; panel.querySelectorAll('select,button').forEach(el => { el.disabled = true; });
       const memory = memories.find(m => m.id === select.dataset.memory);

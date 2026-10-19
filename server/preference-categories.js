@@ -6,15 +6,17 @@ export const PREFERENCE_CATEGORIES = Object.freeze({
   social_notifications: { label: 'Social notifications', question: 'Do you want social activity notifications in your inbox?' },
   event_invitations: { label: 'Events and webinars', question: 'Do you want event and webinar invitations in your inbox?' },
   surveys_feedback: { label: 'Surveys and feedback', question: 'Do you want survey and feedback requests in your inbox?' },
-  cold_outreach: { label: 'Cold outreach', question: 'Do you want unsolicited business outreach in your inbox?' }
+  cold_outreach: { label: 'Cold outreach', question: 'Do you want unsolicited business outreach in your inbox?' },
+  bank_transactions: { label: 'Routine bank transaction notices', question: 'How should I handle routine bank transaction notices older than 30 days?', minimumAgeDays: 30 },
+  security_notices: { label: 'Routine login and verification notices', question: 'How should I handle routine login and verification notices older than 30 days?', minimumAgeDays: 30 }
 });
 export function categoryScope(category) {
-  if (Object.hasOwn(PREFERENCE_CATEGORIES, category || '')) return { kind: 'category', category, label: PREFERENCE_CATEGORIES[category].label, scopeHash: `category:${category}` };
+  if (Object.hasOwn(PREFERENCE_CATEGORIES, category || '')) return { kind: 'category', category, label: PREFERENCE_CATEGORIES[category].label, scopeHash: `category:${category}`, ...(PREFERENCE_CATEGORIES[category].minimumAgeDays ? { minimumAgeDays: PREFERENCE_CATEGORIES[category].minimumAgeDays } : {}) };
   if (!/^topic_[a-z][a-z0-9_]{2,48}$/.test(category || '')) return null;
   const label = category.slice(6).replaceAll('_', ' ');
   return { kind: 'category', category, label: label[0].toUpperCase() + label.slice(1), scopeHash: `category:${category}` };
 }
-export function discoveryModelKey(model) { return `${model || 'default'}:body-topic-preferences-v2`; }
+export function discoveryModelKey(model) { return `${model || 'default'}:dated-topic-preferences-v3`; }
 export function validateExceptions(input) {
   if (!Array.isArray(input) || input.length > 50) throw new Error('Use up to 50 sender exceptions.');
   return input.map(rule => {

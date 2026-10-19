@@ -1,4 +1,5 @@
 import { createOnboarding } from '/onboarding.js';
+import { writePreference } from '/preference-answer.js';
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -300,7 +301,16 @@ function renderLearning() {
   $('#question-notice-title').textContent = `${number(count)} ${count === 1 ? 'question from your agent' : 'questions from your agent'}`;
   $('#questions-tray').innerHTML = count ? learningState.questions.map(q => `<form class="question-card" data-question="${escape(q.id)}"><p class="eyebrow">${escape(q.scope.label || q.scope.listId || q.scope.sender)}</p><h2>${escape(q.question)}</h2><p>${escape(q.reason)}</p><p class="question-context">Example: ${escape(q.sample.subject)}. Left unchanged.</p>${q.options.map(o => `<label class="question-option"><input type="radio" name="answer" value="${escape(o.id)}" required><span>${escape(o.label)}</span></label>`).join('')}<button class="primary" type="submit">Save my answer →</button><p>${q.initial ? 'Applies to your first 100-email sample and future mail. Save preferences before starting cleanup.' : 'Applies to future messages. Previously held emails stay as they are.'}</p></form>`).join('') : empty('You’re all caught up.', 'Questions about uncertain mail will wait here. The agent leaves those emails alone.');
   const labels = { keep: 'Keep in inbox', read: 'Mark low-priority mail read', archive: 'Archive low-priority mail', both: 'Mark read and archive low-priority mail', unsubscribe: 'Unsubscribe from unwanted marketing on this list' };
-  $('#learned-preferences').innerHTML = learningState.memories.length ? learningState.memories.map(m => `<form class="memory-card" data-memory="${escape(m.id)}"><strong>${escape(m.scope.label || m.scope.listId || m.scope.sender)}</strong><p>${escape(m.explanation)}</p><label>Future handling<select name="action">${Object.entries(labels).filter(([action]) => action !== 'unsubscribe' || m.scope.listId).map(([action, label]) => `<option value="${action}" ${action === m.action ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="agent-actions"><button class="secondary" type="submit">Save change</button><button class="text-button" type="button" data-remove-memory="${escape(m.id)}">Forget this preference</button></div><small>Version ${number(m.version)} · still follows your allowed actions and protections.</small></form>`).join('') : '<p>As you answer questions, your preferences appear here.</p>';
+  $('#learned-preferences').innerHTML = learningState.memories.length ? learningState.memories.map(m => `<form class="memory-card" data-memory="${escape(m.id)}"><strong>${escape(m.scope.label || m.scope.listId || m.scope.sender)}</strong><p>${escape(m.explanation)}</p><label>Future handling<select name="action">${Object.entries(labels).filter(([action]) => action !== 'unsubscribe' || m.scope.listId).map(([action, label]) => `<option value="${action}" ${action === m.action ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label>Only after this many days<input name="minAgeDays" type="number" min="${m.scope.minimumAgeDays || 0}" max="3650" value="${m.minAgeDays || m.scope.minimumAgeDays || 0}"></label><label>Written conditions<textarea name="instructions" maxlength="2000" rows="3">${escape(m.instructions || '')}</textarea></label><div class="agent-actions"><button class="secondary" type="submit">Save change</button><button class="text-button" type="button" data-remove-memory="${escape(m.id)}">Forget this preference</button></div><small>Version ${number(m.version)} · still follows your allowed actions and protections.</small></form>`).join('') : '<p>As you answer questions, your preferences appear here.</p>';
+  $('#questions-tray').querySelectorAll('[data-question]').forEach(form => {
+    const question = learningState.questions.find(question => question.id === form.dataset.question);
+    const write = document.createElement('button'); write.type = 'button'; write.className = 'text-button'; write.textContent = 'Or write my own answer'; form.append(write);
+    write.onclick = () => {
+      const hidden = [...form.querySelectorAll('.question-option'), form.querySelector('button')]; hidden.forEach(element => { element.hidden = true; }); write.hidden = true;
+      const custom = document.createElement('div'); form.append(custom);
+      writePreference(custom, { question, request, onSaved: () => loadLearning(), onCancel: () => { custom.remove(); hidden.forEach(element => { element.hidden = false; }); write.hidden = false; } });
+    };
+  });
   renderDiscovery(learningState.discovery);
   if (state?.connected) renderExceptions();
 }
@@ -312,7 +322,7 @@ $('#questions-tray').addEventListener('submit', event => {
 $('#learned-preferences').addEventListener('submit', event => {
   event.preventDefault(); const form = event.target.closest('[data-memory]'); if (!form) return;
   const memory = learningState.memories.find(m => m.id === form.dataset.memory);
-  operation(form.querySelector('button'), 'Saving…', async () => { await request('/api/agent/memories/edit', { memoryId: memory.id, version: memory.version, action: new FormData(form).get('action') }); await loadLearning(); toast('Preference updated for future mail.'); });
+  operation(form.querySelector('button'), 'Saving…', async () => { await request('/api/agent/memories/edit', { memoryId: memory.id, version: memory.version, action: new FormData(form).get('action'), minAgeDays: Number(new FormData(form).get('minAgeDays')), instructions: new FormData(form).get('instructions') }); await loadLearning(); toast('Preference updated for future mail.'); });
 });
 $('#learned-preferences').addEventListener('click', event => {
   const button = event.target.closest('[data-remove-memory]'); if (!button) return;
