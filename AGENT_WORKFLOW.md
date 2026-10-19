@@ -6,7 +6,7 @@ The main dashboard now asks for preferences, then runs the agent without asking 
 
 ## Implemented agent flow
 
-- Explicit AI-processing consent. Discovery sends sender/subject metadata and up to 1,200 characters of text per email from the original sample to the selected provider. It asks up to eight broad, evidence-backed topic questions covering recurring low-priority mail, including routine service notices. It does not change mail or silently enable preferences. Provider changes require renewed consent, and failures never switch providers automatically.
+- Explicit AI-processing consent. Discovery sends sender/subject/date metadata only (no bodies or snippets) from the original sample to the selected provider. It asks up to eight broad, evidence-backed topic questions covering recurring low-priority mail, including routine service notices. It does not change mail or silently enable preferences. Provider changes require renewed consent, and failures never switch providers automatically.
 - Preferences for recruiting/job opportunities, cold outreach, people previously emailed, newsletters, interests, exceptions, permitted action, automatic unsubscribe, and daily schedule.
 - Default permitted action is mark read. Archive and mark read plus archive are separate choices. Automatic unsubscribe is a separate opt-in, with a supported one-click request and consistent marketing-only list history. No delete, trash, or send tool is available.
 - Discovery starts automatically when the user allows AI processing, and caches successful results by account/provider/model. It can create specific questions from the inbox sample in addition to the standard preference suggestions. No discovery happens before consent.

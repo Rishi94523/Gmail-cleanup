@@ -212,7 +212,8 @@ test('grouped discovery preserves evidence through alias mapping and topic selec
   const originalFetch = globalThis.fetch; let calls = 0;
   globalThis.fetch = async (_url, options) => {
     calls++; const input = JSON.parse(JSON.parse(options.body).messages[1].content);
-    const result = input[0].candidateId ? { selected: ['question_1', 'question_3'] } : { summary: 'Recurring topics.', questions: [{ messageId: input[0].id, category: input[0].subject.includes('sale') ? 'sales_discounts' : 'newsletters', question: 'How should I handle offers from this particular brand?', reason: 'This is a recurring topic in this part of the sample.', evidenceQuote: input[0].subject }] };
+    if (input[0].candidateId) { assert.equal(input.length, 2, 'Exact topic duplicates must be combined before the merge call'); assert.equal(input.find(item => item.category === 'sales_discounts').minAgeDays, 90); }
+    const result = input[0].candidateId ? { selected: ['question_1', 'question_2'] } : { summary: 'Recurring topics.', questions: [{ messageId: input[0].id, category: input[0].subject.includes('sale') ? 'sales_discounts' : 'newsletters', minAgeDays: input[0].id === 'email_26' ? 90 : 0, question: 'How should I handle offers from this particular brand?', reason: 'This is a recurring topic in this part of the sample.', evidenceQuote: input[0].subject }] };
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(result) } }] });
   };
   try {
@@ -222,6 +223,26 @@ test('grouped discovery preserves evidence through alias mapping and topic selec
     assert.ok(questions.every(question => !question.question.includes('brand')));
     assert.deepEqual(questions.map(q => q.scope.category).sort(), ['newsletters', 'sales_discounts']);
     assert.ok(questions.every(q => ['Weekend sale and discounts', 'Weekly newsletter digest'].includes(q.sample.subject)));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('discovery fetches headers only and never sends bodies or snippets to the model', async t => {
+  const f = fixture(t); const secretBody = 'BODY_ONLY_DISCOVERY_CANARY';
+  for (const message of f.mails.values()) { message.snippet = secretBody; message.payload.body.data = Buffer.from(secretBody).toString('base64url'); }
+  const originalFactory = f.service.clientFactory; const paths = [];
+  f.service.clientFactory = (...args) => { const client = originalFactory(...args); return async (path, ...rest) => { paths.push(path); return client(path, ...rest); }; };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    assert.ok(!options.body.includes(secretBody));
+    const body = JSON.parse(options.body); const input = JSON.parse(body.messages[1].content);
+    for (const item of input) for (const field of ['text','body','snippet','payload']) assert.equal(Object.hasOwn(item, field), false);
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ questions: [{ messageId: input[0].id, category: 'topic_body_only_evidence', question: 'How should I handle this topic?', reason: 'A fabricated body citation must be rejected.', evidenceQuote: secretBody }] }) } }] });
+  };
+  try {
+    await learnInbox(f.service, f.id, true, 'openrouter');
+    const reads = paths.filter(path => path.startsWith('messages/')); assert.equal(reads.length, 4);
+    for (const path of reads) { const params = new URLSearchParams(path.split('?')[1]); assert.equal(params.get('format'), 'metadata'); assert.deepEqual(params.getAll('metadataHeaders').sort(), ['Date','From','List-ID','Subject']); }
+    assert.equal(f.store.get('SELECT count(*) AS n FROM agent_questions').n, 0);
   } finally { globalThis.fetch = originalFetch; }
 });
 
