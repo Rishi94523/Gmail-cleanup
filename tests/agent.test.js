@@ -8,7 +8,7 @@ import { openStore } from '../server/store.js';
 import { encryption } from '../server/security.js';
 import { InboxService } from '../server/service.js';
 import { DEFAULT_RULES } from '../server/rules.js';
-import { DEFAULT_PREFERENCES, preferences, decisionFor, emailText, runAgent } from '../server/agent.js';
+import { DEFAULT_PREFERENCES, preferences, decisionFor, emailText, runAgent, learnInbox } from '../server/agent.js';
 import { accessFor } from '../server/access.js';
 
 function fixture(t, patch = {}) {
@@ -109,4 +109,18 @@ test('free cleanup uses the same saved sample when newer emails arrive', async t
   f.mails.set('later', { ...structuredClone(f.mails.get('noise')), id: 'later' });
   const next = await trialSample(f.service, f.id, f.service.client(await f.service.account(f.id)));
   assert.deepEqual(next.ids, first.ids); assert.ok(!next.ids.includes('later'));
+});
+
+test('discovery rejects invented career questions and caches the evidence-backed result', async t => {
+  const f = fixture(t); f.mails.get('noise').payload.headers.find(h => h.name === 'Subject').value = 'Weekend sale and discounts';
+  let calls = 0; const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { calls++; return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ summary: 'Sales recur.', questions: [{ messageId: 'noise', category: 'job_opportunities', question: 'Do you want job emails?', reason: 'Invented career evidence' }, { messageId: 'noise', category: 'sales_discounts', question: 'Do you want sales?', reason: 'A weekend sale appears in the sample.' }] }) } }] }), { status: 200 }); };
+  try {
+    const result = await learnInbox(f.service, f.id, true, 'openrouter');
+    assert.ok(!result.evidenceCategories.includes('job_opportunities'));
+    assert.ok(result.evidenceCategories.includes('sales_discounts'));
+    const questions = f.store.all('SELECT scope_hash FROM agent_questions');
+    assert.deepEqual(questions.map(q => q.scope_hash), ['category:sales_discounts']);
+    assert.deepEqual(await learnInbox(f.service, f.id, true, 'openrouter'), result); assert.equal(calls, 1);
+  } finally { globalThis.fetch = originalFetch; }
 });

@@ -1,3 +1,4 @@
+import { discoveryEvidence } from './discovery-evidence.js';
 import { accessFor, requirePaid, trialSample, reserveDiscovery, reserveFreeEmail } from './access.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { headersOf, senderAddress } from './rules.js';
@@ -70,29 +71,37 @@ export async function learnInbox(service, id, consent, provider) {
   const account = await service.account(id); const gmail = service.client(account);
   if (!service.config.aiKey) throw new Error(missingAIKey(service.config));
   const access = await accessFor(service, id);
-  const cached = await service.store.get('SELECT payload FROM agent_discoveries WHERE account_id=? AND provider=? AND model=?', id, provider, discoveryModelKey(service.config.aiModel));
-  if (cached) return service.crypto.open(cached.payload);
+  let cached = await service.store.get('SELECT payload,provider,model FROM agent_discoveries WHERE account_id=? AND provider=? AND model=?', id, provider, discoveryModelKey(service.config.aiModel));
+  if (cached && service.crypto.open(cached.payload).evidenceCategories) return service.crypto.open(cached.payload);
   if (access.tier === 'free') {
-    const previous = await service.store.get('SELECT payload FROM agent_discoveries WHERE account_id=? ORDER BY created LIMIT 1', id);
-    if (previous) return service.crypto.open(previous.payload);
-    if (access.discoveryUsed || !access.remaining) throw new Error('Your free inbox discovery has already been used. You can still set preferences yourself.');
+    const previous = await service.store.get('SELECT payload,provider,model FROM agent_discoveries WHERE account_id=? ORDER BY created LIMIT 1', id);
+    if (previous && !cached) cached = previous;
+    if (cached && service.crypto.open(cached.payload).evidenceCategories) return service.crypto.open(cached.payload);
+    if (!cached && (access.discoveryUsed || !access.remaining)) throw new Error('Your free inbox discovery has already been used. You can still set preferences yourself.');
   }
   const initial = access.tier === 'free' && access.used === 0;
   const list = access.tier === 'free' ? { messages: (await trialSample(service, id, gmail)).ids.map(id => ({ id })) } : await gmail('messages?maxResults=100&q=in%3Ainbox%20is%3Aunread');
-  if (access.tier === 'free' && !await reserveDiscovery(service, id)) throw new Error('Free discovery already started. Set preferences yourself if it was interrupted.');
+  if (!cached && access.tier === 'free' && !await reserveDiscovery(service, id)) throw new Error('Free discovery already started. Set preferences yourself if it was interrupted.');
   const sample = []; const source = new Map();
   for (const { id: messageId } of list.messages || []) {
     const message = await gmail(`messages/${encodeURIComponent(messageId)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=List-ID`);
     source.set(messageId, message);
-    const h = headersOf(message); sample.push({ id: messageId, sender: h.from, subject: h.subject, labels: message.labelIds });
+    const h = headersOf(message); sample.push({ id: messageId, sender: h.from, subject: h.subject, labels: message.labelIds, listId: h['list-id'] || '' });
   }
-  const result = await modelJSON(service.config, 'Suggest inbox preferences from this sample. Do not assume the user consented to subscriptions or knows a sender. Return JSON {"summary":"one short sentence","suggestions":[{"topic":"jobs|coldMail|newsletters|people","note":"one short sentence"}],"questions":[{"messageId":"an exact supplied message id","category":"one allowed preference category","question":"a general category preference, never about a particular product or sender","reason":"why their intent is unclear"}]}. Ask up to three broad questions across senders. Allowed categories: product_announcements, sales_discounts, job_opportunities, newsletters, social_notifications, event_invitations, surveys_feedback, cold_outreach. Deduplicate by category. Sender exceptions are added separately by the user. Suggestions and questions never authorize changing email.', sample);
+  const evidence = discoveryEvidence(sample);
+  const evidenceCategories = Object.keys(evidence).filter(category => evidence[category].length);
+  if (cached) {
+    const discovery = { ...service.crypto.open(cached.payload), evidenceCategories };
+    await service.store.run('UPDATE agent_discoveries SET payload=? WHERE account_id=? AND provider=? AND model=?', service.crypto.seal(discovery), id, cached.provider, cached.model);
+    return discovery;
+  }
+  const result = await modelJSON(service.config, 'Ask questions only about patterns actually present in the supplied inbox sample. Do not ask everyone about jobs, LinkedIn, newsletters, or outreach. For each question, messageId must identify a supplied email that supports that category. If there is no evidence, omit the category. Suggest inbox preferences from this sample. Do not assume the user consented to subscriptions or knows a sender. Return JSON {"summary":"one short sentence","suggestions":[{"topic":"jobs|coldMail|newsletters|people","note":"one short sentence"}],"questions":[{"messageId":"an exact supplied message id","category":"one allowed preference category","question":"a general category preference, never about a particular product or sender","reason":"why their intent is unclear"}]}. Ask up to three broad questions across senders. Allowed categories: product_announcements, sales_discounts, job_opportunities, newsletters, social_notifications, event_invitations, surveys_feedback, cold_outreach. Deduplicate by category. Sender exceptions are added separately by the user. Suggestions and questions never authorize changing email.', sample);
   for (const question of (Array.isArray(result.questions) ? result.questions : []).slice(0, 3)) {
     if (!source.has(question.messageId) || typeof question.question !== 'string' || question.question.length > 240 || !question.question.trim() || typeof question.reason !== 'string' || question.reason.length > 400) continue;
-    if (!categoryScope(question.category)) continue;
+    if (!categoryScope(question.category) || !evidence[question.category]?.includes(question.messageId)) continue;
     await askPreference(service, id, source.get(question.messageId), preferences(account.rules.agent), { category: question.category, question: question.question, reason: question.reason }, { initial });
   }
-  const discovery = { inspected: sample.length, summary: String(result.summary || 'Choose what you want to keep.').slice(0, 400), suggestions: (Array.isArray(result.suggestions) ? result.suggestions : []).filter(s => ['jobs', 'coldMail', 'newsletters', 'people'].includes(s.topic) && typeof s.note === 'string').slice(0, 4).map(s => ({ topic: s.topic, note: s.note.slice(0, 240) })) };
+  const discovery = { evidenceCategories, inspected: sample.length, summary: String(result.summary || 'Choose what you want to keep.').slice(0, 400), suggestions: (Array.isArray(result.suggestions) ? result.suggestions : []).filter(s => ['jobs', 'coldMail', 'newsletters', 'people'].includes(s.topic) && typeof s.note === 'string').slice(0, 4).map(s => ({ topic: s.topic, note: s.note.slice(0, 240) })) };
   await service.store.run('INSERT INTO agent_discoveries(account_id,provider,model,payload,created) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING', id, provider, discoveryModelKey(service.config.aiModel), service.crypto.seal(discovery), Date.now());
   return discovery;
 }

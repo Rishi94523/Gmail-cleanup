@@ -26,7 +26,7 @@ export async function createApp(options = {}) {
   const ready = Boolean(crypto && config.clientId && config.clientSecret);
   const service = crypto ? new InboxService(store, crypto, config, options.clientFactory) : null;
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
-  const assets = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']]]);
+  const assets = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/onboarding.js', ['onboarding.js', 'text/javascript']], ['/onboarding.css', ['onboarding.css', 'text/css']]]);
   function cookie(value, maxAge = 2592000) { return `inboxclean_session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${origin.startsWith('https:') ? '; Secure' : ''}`; }
   function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); }
   function redirect(res, to) { res.writeHead(302, { Location: to }); res.end(); }

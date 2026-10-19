@@ -2,6 +2,8 @@
 
 [Open Inboxclean](https://gmail-cleanup-web-450826266929.us-central1.run.app). The Cloud Run service serves the React landing page, Google OAuth, and the Gmail dashboard at `/app`, backed by Neon PostgreSQL. New accounts receive one free cleanup of up to 100 unread inbox emails. Daily and additional cleanups require a server-controlled paid entitlement; checkout and cloud daily scheduling are not enabled yet.
 
+The first connection opens a focused screen without the workspace sidebar. It asks for AI consent, shows an animated analysis state, presents one inbox-grounded question at a time, and asks for the final cleanup action. It resumes unanswered questions after a refresh. The workspace appears after completion.
+
 The free first-run flow is: connect Gmail, explicitly allow AI processing, discover preferences from a saved sample of up to 100 emails, answer broad questions, then authorize cleanup. The same sample is used for cleanup. Important and uncertain mail stays; eligible mail is marked read, archived, or both according to saved permissions. An exhausted allowance cannot be reset by reloading, changing preferences, undoing a run, or reconnecting. Ambiguous failures consume a reservation rather than replaying model calls. The encrypted sample is removed on disconnect; hashed quota and message-use records remain to prevent repeated free trials.
 
 A Gmail agent with editable preferences, persistent questions for uncertain mail, reversible label/read changes, and separately permitted intelligent unsubscribe. It learns from explicit answers and leaves held emails unchanged. See [PREFERENCE_LEARNING.md](PREFERENCE_LEARNING.md) for storage and behavior. No fabricated mailbox results are shown in the app.

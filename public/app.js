@@ -1,3 +1,4 @@
+import { createOnboarding } from '/onboarding.js';
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -181,13 +182,14 @@ document.addEventListener('click', event => {
 $('#disconnect-button').addEventListener('click', () => { $('#disconnect-approval').hidden = false; });
 $('#cancel-disconnect').addEventListener('click', () => { $('#disconnect-approval').hidden = true; });
 $('#confirm-disconnect').addEventListener('click', event => operation(event.target, 'Disconnecting…', async () => { await request('/api/disconnect', {}); $('#disconnect-approval').hidden = true; await refresh(); showPage('overview'); toast('Gmail disconnected. Local account data removed.'); }));
+const onboarding = createOnboarding({ getState: () => state, request, refresh, startAgent, showPage });
 const auth = new URLSearchParams(location.search).get('auth');
 if (auth) {
-  const messages = { connected: 'Gmail connected. Choose your rules, then preview your first cleanup.', setup: 'Add your Google OAuth client to the server configuration before connecting.', cancelled: 'Connection cancelled. Your Gmail was not changed.', state: 'The connection link expired. Start again from Connect Gmail.', failed: 'Gmail connection could not complete. Check your OAuth client, redirect URI, test-user access, and requested permissions, then try again.' };
+  const messages = { connected: 'Gmail connected. Let’s get to know your inbox.', setup: 'Add your Google OAuth client to the server configuration before connecting.', cancelled: 'Connection cancelled. Your Gmail was not changed.', state: 'The connection link expired. Start again from Connect Gmail.', failed: 'Gmail connection could not complete. Check your OAuth client, redirect URI, test-user access, and requested permissions, then try again.' };
   $('#notice-banner').textContent = messages[auth] || 'Review your connection settings.'; $('#notice-banner').hidden = false;
 }
 showPage(location.hash.slice(1));
-refresh(true).then(() => { if (auth === 'connected' && !state.rules.agent?.enabled) showPage('rules'); }).catch(err => error(`The app could not load: ${err.message}`));
+refresh(true).then(async () => { if (state.connected && (state.access?.remaining ?? 1) > 0 && (!state.rules.agent?.enabled || (auth === 'connected' && !state.access?.used))) { $('#notice-banner').hidden = true; await onboarding.open(); } }).catch(err => error(`The app could not load: ${err.message}`)).finally(() => document.body.classList.remove('booting'));
 
 const agentDefaults = { enabled: false, consent: false, consentProvider: '', keepJobs: true, coldMail: 'exceptional', keepPeople: true, keepNewsletters: true, autoUnsubscribe: false, action: 'read', exceptions: '', interests: '' };
 function providerName() { return state.aiProvider === 'nebius' ? 'Nebius Token Factory' : 'OpenRouter'; }
@@ -223,7 +225,7 @@ function renderAgentPreferences() {
 }
 $('#agent-consent').addEventListener('change', () => { renderAgentControls(); maybeDiscover(); });
 function maybeDiscover() {
-  if (!state?.connected || !state.aiConfigured || busy || discoveryStarted || learningState.discovery || !$('#agent-consent').checked) return;
+  if (document.body.classList.contains('booting') || onboarding.active || !state?.connected || !state.aiConfigured || busy || discoveryStarted || learningState.discovery || !$('#agent-consent').checked) return;
   discoveryStarted = true;
   operation($('#agent-learn'), 'Learning your inbox…', async () => {
   const learned = await request('/api/agent/learn', { consent: $('#agent-consent').checked, provider: state.aiProvider || 'openrouter' });
@@ -238,7 +240,7 @@ $('#preferences-form').addEventListener('submit', event => {
   const rules = { ...state.rules, agent, aiEnabled: state.rules.aiEnabled && state.rules.aiConsentProvider === (state.aiProvider || 'openrouter'), daily: agent.enabled && state.schedulerActive && $('#pref-daily').checked, hour: Number($('#pref-hour').value), timezone: $('#pref-zone').value };
   operation($('#save-preferences'), 'Saving…', async () => { await request('/api/rules', rules); await refresh(); if (agent.enabled && state.access?.tier === 'free' && state.access.remaining) { if (learningState.questions.length) { showPage('questions'); toast('Answer your setup questions, then start your free cleanup from Overview.'); } else { showPage('overview'); await startAgent(); } } else { showPage('overview'); toast(agent.enabled ? 'Preferences saved. Start your agent when you’re ready.' : 'Preferences saved. AI needs to be configured before the agent can run.'); } });
 });
-async function startAgent() {
+async function startAgent(onEvent = () => {}) {
   $('#agent-progress').hidden = false; $('#agent-progress .agent-motion').hidden = false; $('#agent-decisions').innerHTML = ''; $('#agent-stage').textContent = 'Connecting to your inbox'; $('#agent-counts').textContent = ''; $('#agent-meter').value = 0;
   const response = await fetch('/api/agent/run', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify({ authorize: true }) });
   if (!response.ok) throw new Error('Agent could not start. Reload and try again.');
@@ -250,6 +252,7 @@ async function startAgent() {
       while ((newline = buffer.indexOf('\n')) >= 0) {
         const event = JSON.parse(buffer.slice(0, newline)); buffer = buffer.slice(newline + 1);
         if (event.type === 'heartbeat') continue;
+        onEvent(event);
         if (event.type === 'question') await loadLearning();
         if (event.type === 'error') throw new Error(event.message);
         if (event.type === 'stage') $('#agent-stage').textContent = event.message;

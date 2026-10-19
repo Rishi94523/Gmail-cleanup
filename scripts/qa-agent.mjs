@@ -12,7 +12,7 @@ await new Promise(resolve => app.server.listen(3070, '127.0.0.1', resolve));
 const browser = await chromium.launch({ executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } }); const errors = []; page.on('pageerror', e => errors.push(e.message));
-  const state = { connected: true, configured: true, aiConfigured: true, aiProvider: 'nebius', aiModel: 'nvidia/Nemotron-3.5-Super-VL', schedulerActive: false, preferenceCategories: PREFERENCE_CATEGORIES, access: { tier: 'free', used: 0, remaining: 100, dailyAllowed: false }, csrf: 'fixture-only', email: 'test@example.invalid', rules: { ...DEFAULT_RULES }, runs: [], subscriptions: [], plan: null, totals: {} }; let learned = false; let ran = false;
+  const state = { connected: true, configured: true, aiConfigured: true, aiProvider: 'nebius', aiModel: 'nvidia/Nemotron-3.5-Super-VL', schedulerActive: false, preferenceCategories: PREFERENCE_CATEGORIES, access: { tier: 'free', used: 0, remaining: 100, dailyAllowed: false }, csrf: 'fixture-only', email: 'test@example.invalid', rules: { ...DEFAULT_RULES, agent: { enabled: true } }, runs: [], subscriptions: [], plan: null, totals: {} }; let learned = false; let ran = false;
   const tray = { questions: [], memories: [], discovery: null, questionsTotal: 0 };
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname;
