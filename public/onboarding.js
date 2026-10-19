@@ -1,3 +1,4 @@
+import { customerMessage } from './customer-message.js';
 import { writePreference } from './preference-answer.js';
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -8,19 +9,18 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
   document.body.append(root);
   const panel = root.querySelector('#ob-panel');
   let active = false; let working = false; let discovery; let question; let answered = 0; let total = 0; let reviewPage = 0; let complete;
-  const provider = () => getState().aiProvider === 'nebius' ? 'Nebius Token Factory' : 'OpenRouter and your selected model provider';
   const motion = (thinking = false) => `<div class="ob-agents ${thinking ? 'thinking' : ''}" aria-hidden="true"><span class="ob-orbit"></span><span class="ob-agent ob-reader">✉</span><span class="ob-agent ob-thinker"><i></i><i></i><i></i></span><span class="ob-agent ob-spark">✧</span></div>`;
   function render(content, thinking = false) { panel.innerHTML = `${motion(thinking)}<div class="ob-content">${content}</div>`; panel.classList.remove('ob-enter'); void panel.offsetWidth; panel.classList.add('ob-enter'); panel.querySelector('h1')?.setAttribute('tabindex', '-1'); panel.querySelector('h1')?.focus({ preventScroll: true }); }
   function thinking(title, text) { render(`<p class="ob-kicker">YOUR AGENT IS ON IT</p><h1>${escape(title)}</h1><p class="ob-copy">${escape(text)}</p><div class="ob-thinking-line" role="status" aria-live="polite"><i></i> Reading patterns. Connecting the dots.</div>`, true); }
   function fail(error, duringCleanup = false) {
     working = false;
-    render(`<p class="ob-kicker">LET’S PAUSE HERE</p><h1>Your inbox can wait.</h1><p class="ob-copy">${escape(error.message)}</p><p class="ob-detail">${duringCleanup ? 'Some changes may already be recorded. Check Activity before trying again.' : 'No cleanup has started. Your emails are unchanged.'}</p><button class="primary ob-primary" id="ob-dashboard">${duringCleanup ? 'Check activity' : 'Open my workspace'} →</button>`);
+    render(`<p class="ob-kicker">LET’S PAUSE HERE</p><h1>Your inbox can wait.</h1><p class="ob-copy">${escape(duringCleanup ? customerMessage(error.message) : 'We couldn’t finish learning your preferences. Please try again later.')}</p><p class="ob-detail">${duringCleanup ? 'Some changes may already be recorded. Check Activity before trying again.' : 'No cleanup has started. Your emails are unchanged.'}</p><button class="primary ob-primary" id="ob-dashboard">${duringCleanup ? 'Check activity' : 'Open my workspace'} →</button>`);
     panel.querySelector('button').onclick = () => close(duringCleanup ? 'activity' : 'overview');
   }
   function close(page = 'overview') { active = false; root.hidden = true; document.body.classList.remove('onboarding-open'); showPage(page); }
   function intro() {
     const repair = getState().access?.recoveryAvailable;
-    render(`<p class="ob-kicker">${repair ? 'YOUR EARLIER RUN MADE NO CHANGES' : 'CONNECTED. NOW, LET’S GET ACQUAINTED.'}</p><h1>${repair ? 'Let’s take another look.' : 'A little thinking.<br>A lighter inbox.'}</h1><p class="ob-copy">${repair ? 'Review the original sample with the updated agent, including emails previously left waiting. Your saved preferences stay.' : 'Your agent will look at the subjects, senders and dates of up to 100 unread emails, then ask what matters to you.'}</p><label class="ob-consent"><input id="ob-consent" type="checkbox"><span>${repair ? 'Reassess my original sample with AI' : 'Allow AI to analyze my email'}</span></label><p class="ob-detail">${escape(provider())} receives subjects, sender details and dates during discovery. Email text is shared only during cleanup. No attachments. Nothing changes until you approve your preferences and start cleanup.</p><button class="primary ob-primary" id="ob-discover" disabled>${repair ? 'Review my questions again' : 'Let my agent look'} →</button>`);
+    render(`<p class="ob-kicker">${repair ? 'YOUR EARLIER RUN MADE NO CHANGES' : 'CONNECTED. NOW, LET’S GET ACQUAINTED.'}</p><h1>${repair ? 'Let’s take another look.' : 'A little thinking.<br>A lighter inbox.'}</h1><p class="ob-copy">${repair ? 'Review the original sample with the updated agent, including emails previously left waiting. Your saved preferences stay.' : 'Your agent will look at the subjects, senders and dates of up to 100 unread emails, then ask what matters to you.'}</p><label class="ob-consent"><input id="ob-consent" type="checkbox"><span>${repair ? 'Reassess my original sample with AI' : 'Allow AI to analyze my email'}</span></label><p class="ob-detail">Our AI service analyzes subjects, sender details and dates to suggest preferences. Email text is shared only during cleanup. No attachments. Nothing changes until you approve your preferences and start cleanup.</p><button class="primary ob-primary" id="ob-discover" disabled>${repair ? 'Review my questions again' : 'Let my agent look'} →</button>`);
     const consent = panel.querySelector('input'); const button = panel.querySelector('button');
     consent.onchange = () => { button.disabled = !consent.checked || !getState().aiConfigured; };
     button.onclick = async () => {

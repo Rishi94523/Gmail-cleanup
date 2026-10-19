@@ -92,8 +92,9 @@ try {
   await page.screenshot({ path: resolve(output, 'agent-mobile.png'), fullPage: true });
   state.aiProvider = 'openrouter'; await page.reload();
   await page.getByRole('button', { name: 'Preferences', exact: true }).first().click();
-  await page.waitForFunction(() => document.querySelector('#agent-consent-description').textContent.includes('OpenRouter'));
+  await page.waitForFunction(() => document.querySelector('#agent-consent-description').textContent.includes('our AI service'));
   assert.equal(await page.locator('#agent-consent').isChecked(), false);
+  assert.doesNotMatch(await page.locator('body').innerText(), /Nebius|Token Factory|OpenRouter|fixture-model|API_KEY|README|\.env\b/i);
   assert.equal(await page.locator('#agent-start').isDisabled(), true);
   assert.deepEqual(errors, []);
   console.log('PASS automatic discovery after consent, persistent MCQ tray, answering and editing learned preferences, desktop/mobile layout, provider consent, paid-only daily controls, exhaustion controls, and streamed decisions. Gmail and AI were test fixtures; no live email actions.');

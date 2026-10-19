@@ -27,7 +27,7 @@ export async function createApp(options = {}) {
   const ready = Boolean(crypto && config.clientId && config.clientSecret);
   const service = crypto ? new InboxService(store, crypto, config, options.clientFactory) : null;
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
-  const assets = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/onboarding.js', ['onboarding.js', 'text/javascript']], ['/onboarding.css', ['onboarding.css', 'text/css']], ['/preference-answer.js', ['preference-answer.js', 'text/javascript']]]);
+  const assets = new Map([['/customer-message.js', ['customer-message.js', 'text/javascript']], ['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/onboarding.js', ['onboarding.js', 'text/javascript']], ['/onboarding.css', ['onboarding.css', 'text/css']], ['/preference-answer.js', ['preference-answer.js', 'text/javascript']]]);
   function cookie(value, maxAge = 2592000) { return `inboxclean_session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${origin.startsWith('https:') ? '; Secure' : ''}`; }
   function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); }
   function redirect(res, to) { res.writeHead(302, { Location: to }); res.end(); }
@@ -171,8 +171,9 @@ export async function createApp(options = {}) {
     } catch (error) {
       // No raw provider responses or tokens in errors/logs.
       const databaseError = /^[0-9A-Z]{5}$/.test(error.code || '') || /SQLITE|constraint|database|fetch failed|ENOENT/i.test(error.message);
-      const safe = databaseError ? 'The operation could not complete. Please try again or check the server configuration.' : error.message;
-      return json(res, 400, { error: safe });
+      const internal = databaseError || /Nebius|OpenRouter|API[_ -]?KEY|AI_PROVIDER|AI_MODEL|OAuth client|redirect URI|README|\.env\b|model access|provider.*changed/i.test(error.message);
+      const safe = error.publicCode ? publicFailure(error).message : internal ? 'This feature is temporarily unavailable. Please try again later.' : error.message;
+      return json(res, 400, { error: safe, ...(error.publicCode ? { code: error.publicCode } : {}) });
     }
   });
   let ticking = false;

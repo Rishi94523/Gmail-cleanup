@@ -14,7 +14,7 @@ try {
   const state = { connected: true, configured: true, aiConfigured: true, aiProvider: 'nebius', aiModel: 'fixture-model', schedulerActive: false, csrf: 'fixture', email: 'fixture@example.invalid', access: { tier: 'free', used: 0, remaining: 100 }, rules: { ...DEFAULT_RULES }, runs: [], subscriptions: [], totals: {}, setupMissing: [] };
   const q = (id, category, question) => ({ id, scope: { kind: 'category', category, label: category.replaceAll('_', ' ') }, version: 1, initial: true, question, reason: 'A recurring pattern in this inbox sample.', sample: { subject: 'An example email' }, options: [{ id: 'keep', label: 'Keep' }, { id: 'read', label: 'Mark read' }, { id: 'archive', label: 'Archive' }, { id: 'both', label: 'Both' }, { id: 'later', label: 'Later' }] });
   const tray = { questions: [q('unsupported-job', 'job_opportunities', 'Do you want job opportunities in your inbox?'), q('product', 'product_announcements', 'Do you want product announcements in your inbox?'), q('newsletter', 'newsletters', 'Do you want newsletters and blog updates in your inbox?')], memories: [], discovery: null };
-  let release; const discoveryGate = new Promise(resolve => { release = resolve; }); let learned = false; let ran = false; let repairRequested = false;
+  let release; const discoveryGate = new Promise(resolve => { release = resolve; }); let discoveryFails = false; let learned = false; let ran = false; let repairRequested = false;
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname; let json;
     if (path === '/api/status') json = state;
@@ -22,7 +22,7 @@ try {
     else if (path === '/api/agent/questions') json = { ...tray, questionsTotal: tray.questions.length };
     else if (path === '/api/rules') { const data = route.request().postDataJSON(); state.rules = { ...data, agent: { ...DEFAULT_PREFERENCES, ...data.agent } }; json = { rules: state.rules }; }
     else if (path === '/api/agent/reassess-trial') { assert.equal(route.request().postDataJSON().authorize, true); repairRequested = true; state.access = { ...state.access, recoveryAvailable: false, recovering: true, remaining: 100 }; json = { status: 'ready', sampleCount: 100 }; }
-    else if (path === '/api/agent/learn') { learned = true; await discoveryGate; tray.discovery = { inspected: 100, evidenceCategories: ['product_announcements', 'newsletters'], summary: 'Product updates and publications recur.', suggestions: [] }; json = tray.discovery; }
+    else if (path === '/api/agent/learn') { if (discoveryFails) return route.fulfill({ status: 400, json: { error: 'Nebius Token Factory reached its response limit before returning a complete decision.', code: 'AI_TRUNCATED' } }); learned = true; await discoveryGate; tray.discovery = { inspected: 100, evidenceCategories: ['product_announcements', 'newsletters'], summary: 'Product updates and publications recur.', suggestions: [] }; json = tray.discovery; }
     else if (path === '/api/agent/questions/interpret') { const data = route.request().postDataJSON(); assert.match(data.text, /90 days/); json = { supported: true, action: 'archive', minAgeDays: 90, instructions: data.text }; }
     else if (path === '/api/agent/questions/answer') {
       const data = route.request().postDataJSON(); assert.notEqual(data.questionId, 'unsupported-job');
@@ -75,6 +75,12 @@ try {
   await page.reload(); await page.getByRole('heading', { name: 'Let’s take another look.' }).waitFor(); await check('repair-consent');
   assert.equal(repairRequested, false); await page.locator('#ob-consent').check(); await page.locator('#ob-discover').click();
   await page.getByRole('heading', { name: 'Your preferences, ready.' }).waitFor(); assert.equal(repairRequested, true);
+  discoveryFails = true; state.access = { ...state.access, used: 0, remaining: 100, recoveryAvailable: false, recovering: false }; state.rules.agent.enabled = false; state.rules.agent.consent = false; tray.discovery = null;
+  await page.reload(); await page.locator('#ob-consent').check(); await page.locator('#ob-discover').click();
+  await page.getByRole('heading', { name: 'Your inbox can wait.' }).waitFor();
+  assert.match(await page.locator('#onboarding').innerText(), /couldn’t finish learning your preferences/);
+  assert.doesNotMatch(await page.locator('#onboarding').innerText(), /Nebius|Token Factory|OpenRouter|response limit|API|model/i);
+  await check('plain-language-error');
   assert.deepEqual(errors, []);
   console.log('PASS consent before analysis; no sidebar or scrolling at desktop/390px/320px; animated analysis; evidence-only sequential questions; reload resumes; independent topic actions and paginated review; streamed cleanup; reduced motion; workspace after completion. Gmail/model are fixtures.');
 } finally { await browser.close(); await app.close(); }
