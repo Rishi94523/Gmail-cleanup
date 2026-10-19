@@ -21,7 +21,7 @@ function mail(id, subject = 'Product updates', listId = 'marketing.product.examp
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'inboxclean-learning-')); const store = openStore(dir); const crypto = encryption(randomBytes(32).toString('base64'));
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
-  const id = 'owner@example.invalid'; const rules = { ...DEFAULT_RULES, agent: { ...DEFAULT_PREFERENCES, enabled: true, consent: true, consentProvider: 'openrouter', keepPeople: false, autoUnsubscribe: true } };
+  const id = 'owner@example.invalid'; const rules = { ...DEFAULT_RULES, agent: { ...DEFAULT_PREFERENCES, enabled: true, consent: true, consentProvider: 'nebius', keepPeople: false, autoUnsubscribe: true } };
   store.run('INSERT INTO accounts(id,email,tokens,rules,created) VALUES(?,?,?,?,?)', id, id, crypto.seal({}), JSON.stringify(rules), Date.now());
   const messages = new Map([['one', mail('one')], ['two', mail('two')]]); let writes = 0;
   const gmail = async (path, body) => {
@@ -31,7 +31,7 @@ function fixture(t) {
     if (body) { writes++; message.labelIds = message.labelIds.filter(label => !body.removeLabelIds.includes(label)); }
     return structuredClone(message);
   };
-  return { id, store, crypto, rules, messages, service: new InboxService(store, crypto, { aiKey: 'fixture-only', aiProvider: 'openrouter' }, () => gmail), writes: () => writes };
+  return { id, store, crypto, rules, messages, service: new InboxService(store, crypto, { aiKey: 'fixture-only', aiProvider: 'nebius' }, () => gmail), writes: () => writes };
 }
 const args = { category: 'product_announcements', question: 'Do you want updates from this product?', reason: 'Your subscription intent is unclear.' };
 
@@ -226,4 +226,17 @@ test('automatic unsubscribe refuses mail that moved out of Primary before the re
   let posts = 0;
   await assert.rejects(automaticUnsubscribe(f.service, f.id, f.messages.get('one'), async () => {}, f.rules, async () => { posts++; }), /Subscription changed/);
   assert.equal(posts, 0); assert.equal(f.store.get('SELECT count(*) AS total FROM subscription_actions').total, 0);
+});
+
+test('subscription profiles identify the sender and sample without exposing encrypted storage; confirmed requests are not replayed', async t => {
+  const f = fixture(t); const message = f.messages.get('one');
+  message.payload.headers.find(h => h.name === 'From').value = 'Product Studio <offers@product.example>';
+  await f.service.recordSubscriptions(f.id, [message]);
+  const row = f.store.get('SELECT * FROM subscriptions WHERE account_id=?', f.id);
+  assert.equal(row.status, 'review'); assert.ok(!row.payload.includes('Product Studio'));
+  const profile = f.crypto.open(row.payload); assert.equal(profile.displayName, 'Product Studio'); assert.equal(profile.subject, 'Product updates');
+  let requests = 0;
+  assert.equal((await f.service.unsubscribe(f.id, 'offers@product.example', async () => { requests++; })).status, 'requested');
+  await assert.rejects(f.service.unsubscribe(f.id, 'offers@product.example', async () => { requests++; }), /already submitted/);
+  assert.equal(requests, 1); assert.equal(f.store.get('SELECT status FROM subscriptions').status, 'requested');
 });

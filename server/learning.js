@@ -15,6 +15,7 @@ export function questionExplanation(reason, scope, sample) {
   return reason;
 }
 async function initialSamplePending(service, id, store = service.store) {
+  if (service.config.hackathonMode) return !(await store.get("SELECT count(*) AS total FROM runs WHERE account_id=? AND kind IN ('cleanup','daily')", id)).total;
   const row = await store.get('SELECT payload FROM trial_samples WHERE account_id=?', id);
   const sample = row && service.crypto.open(row.payload);
   if (sample?.repair?.active) return sample.repair.claimed.length === 0;
@@ -80,7 +81,7 @@ export async function learningTray(service, id) {
   const [questions, memories, discovery, pending] = await Promise.all([
     service.store.all("SELECT id,payload,version,created,deferred_at FROM agent_questions WHERE account_id=? AND status='pending' AND scope_hash LIKE 'category:%' AND snoozed_until<=? ORDER BY created LIMIT 20", id, Date.now()),
     service.store.all('SELECT id,payload,version,updated FROM preference_memories WHERE account_id=? ORDER BY updated DESC LIMIT 200', id),
-    service.store.get('SELECT payload FROM agent_discoveries WHERE account_id=? AND provider=? AND model=?', id, service.config.aiProvider || 'openrouter', discoveryModelKey(service.config.aiModel)),
+    service.store.get('SELECT payload FROM agent_discoveries WHERE account_id=? AND provider=? AND model=?', id, service.config.aiProvider || 'nebius', discoveryModelKey(service.config.aiModel)),
     service.store.get("SELECT count(*) AS total FROM agent_questions WHERE account_id=? AND status='pending' AND scope_hash LIKE 'category:%' AND snoozed_until<=?", id, Date.now())
   ]);
   const initialPending = await initialSamplePending(service, id);
@@ -93,7 +94,7 @@ export async function learningTray(service, id) {
 async function recordEvent(tx, service, id, data) { await tx.run('INSERT INTO preference_events(id,account_id,payload,created) VALUES(?,?,?,?)', randomUUID(), id, service.crypto.seal(data), Date.now()); }
 export async function interpretPreference(service, id, input) {
   const account = await service.account(id);
-  if (!account.rules.agent?.consent || account.rules.agent.consentProvider !== (service.config.aiProvider || 'openrouter')) throw new Error('Allow AI processing for the selected provider first.');
+  if (!account.rules.agent?.consent || account.rules.agent.consentProvider !== (service.config.aiProvider || 'nebius')) throw new Error('Allow AI processing for the selected provider first.');
   if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 2000) throw new Error('Write an answer of 1 to 2000 characters.');
   const row = await service.store.get("SELECT id,payload,version FROM agent_questions WHERE id=? AND account_id=? AND status='pending'", input.questionId, id);
   if (!row || row.version !== input.version) throw new Error('Question changed. Reload before answering.');

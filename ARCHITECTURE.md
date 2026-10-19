@@ -1,39 +1,24 @@
-# Implementation and deployment plan
+# Architecture
 
-## Implemented locally
+The same Node service serves the React landing page, workspace, OAuth callback and API. Cloud Run uses Neon PostgreSQL and Secret Manager. Local development uses SQLite and environment keys. NVIDIA Nemotron 3.5 Super VL is called only through Nebius Token Factory; no alternate model provider is enabled.
 
-- JavaScript Node.js backend with asynchronous REST/storage operations and shared PostgreSQL persistence on Neon; SQLite remains a local/test fallback.
-- Google OAuth 2.0 authorization-code flow with state, PKCE, offline access, encrypted tokens, and CSRF-protected writes.
-- Configurable Gmail queries, bounded/paginated metadata scans, explicit cleanup approvals, per-message label deltas, and undo.
-- Explicitly permitted intelligent automatic unsubscribe for consistent unwanted marketing lists, with transactional/publication protections and authenticated one-click transport; sender-specific manual approval remains available.
-- Persistent, encrypted questions and explicit user preference memories in Postgres, scoped to account and sender/list. Held mail is never retroactively changed by answers; edits use versions and an audit trail.
-- Shared Nebius/OpenRouter JSON transport selected with `AI_PROVIDER`, provider-specific keys/models, explicit provider-bound data-sharing consent, and validated model decisions. Jev's typed API remains a future adapter/evaluation task.
-- Local timezone-aware scheduler with durable account/day claims and account-level job leases.
-- React/TypeScript product preview and a Dockerfile for the local backend.
-- 21 automated backend/preview tests, plus real-Neon HTTP/integration and production restart checks. Provider behavior is simulated in tests; live Gmail integration remains unverified.
+## Agent flow
 
-## Selected production target: Google Cloud Run
+- Discovery freezes the initial Primary sample before cleanup. It sends header metadata in groups of 25, with two model requests at a time. Evidence-backed broad topics are deduplicated before questions are saved.
+- Topic preferences and written conditions are encrypted, versioned and editable. Sender exceptions take precedence. Initial answers can authorize the initial sample; answers after cleanup starts affect future mail only.
+- Cleanup fetches 20-message windows, asks for two concurrent batches of ten decisions, then rechecks permissions and labels before serial Gmail writes. A model decision cannot override protected labels or user permissions.
+- Changes are reserved before external writes and confirmed afterward. Uncertain writes are not replayed. Undo restores only labels/read state that the run changed.
+- Uncertain topics use `ask_preference`; the email is held unchanged and the agent continues. Pending questions persist until the user answers or snoozes them.
+- Automatic unsubscribe is separately enabled and limited to verified one-click endpoints. DNS/address restrictions and signed headers prevent arbitrary network actions. There is no general browser or shell tool exposed to email content.
 
-The frontend is React and TypeScript. The current backend is JavaScript/Node with the `pg` PostgreSQL driver, versioned SQL migrations, and native HTTP handlers. TypeScript/NestJS and Prisma remain possible future choices; neither is implemented or required by the current database setup.
+## Daily execution
 
-Deploy separate stateless API and task-handler services as Docker containers. Use PostgreSQL for account-owned records, schedules, approvals, audit history, and durable checkpoints. Replace process-local timers with a Cloud Scheduler dispatcher that finds due accounts and enqueues authenticated Cloud Tasks HTTP requests. The worker processes bounded batches and persists progress before returning.
+Local development uses an in-process minute timer. Cloud Run uses Cloud Scheduler every five minutes, with a Google-signed OIDC identity token verified for the exact audience and expected scheduler service account. Only users who enabled daily cleanup are eligible. A database lease and an account-local daily claim prevent duplicate runs across replicas and retries. The browser can be closed, and the service can scale to zero between requests.
 
-Cloud Tasks replaces the earlier Redis/BullMQ deployment proposal for this target. Request-based Cloud Run instances can scale to zero; background polling inside an idle API container is not the production scheduler. Database identity and authorization must remain scoped to the connected account. Task handlers must validate Cloud Tasks service identity and persisted authorization, rather than trust a user ID supplied in an unauthenticated request.
+`HACKATHON_MODE=true` enables repeat manual runs and daily cleanups, capped at 100 Primary emails per run. The retained commercial allowance code is inactive in this mode; it is not a payment system. Account/model concurrency remains bounded. This demo deployment is not a verified thousand-concurrent-user capacity claim.
 
-Use unique account/date/job keys and transactional leases to prevent duplicate execution. Mutating Gmail requests with ambiguous completion must be reconciled, never blindly replayed. Separate job retries from non-idempotent external effects. Enforce per-account/provider quotas, bounded worker concurrency, and global dispatch backpressure. Store encrypted OAuth refresh tokens in the database and encryption material in Secret Manager.
+## Storage and observability
 
-Deploy using GitHub Actions with short-lived cloud identity, health checks, and a rollback procedure. Add logging, monitoring, retention, and secret-safe backups. Benchmark representative mailbox sizes and simultaneous sessions before publishing capacity claims.
+OAuth tokens, discovery/sample context, learned preferences, example subscription subjects and cleanup deltas use AES-256-GCM encryption. Sessions and account data are scoped per user. CSRF checks protect browser writes; the scheduler uses its separate authenticated endpoint.
 
-## Not implemented or verified yet
-
-- Cloud Tasks, Cloud Scheduler, Secret Manager configuration, and GitHub Actions deployment. The Neon PostgreSQL schema and async storage migration are implemented and tested locally.
-- Google Cloud Run deployment of the real Gmail backend and task services. The public product preview is deployed separately.
-- Live OAuth/token refresh, real Gmail changes, real unsubscribe delivery, or real model-provider responses.
-- Public Google OAuth verification and any required security assessment.
-- Thousand-user load testing or measured infrastructure/AI cost.
-
-The public GitHub repository is a source-code project link. The [Cloud Run URL](https://gmail-cleanup-web-450826266929.us-central1.run.app) serves the product preview; neither is evidence of fully operational Gmail automation.
-
-## Deployment preparation
-
-The React preview now has a multi-stage Cloud Run Docker image, a static HTTP entrypoint, Cloud Build configuration, and a PowerShell deployment script. The script creates a runtime identity without application IAM grants, deploys with a zero-instance minimum and two-instance maximum, and verifies a health endpoint that declares Gmail disabled. Local HTTP tests cover asset boundaries and disabled Gmail routes. This prepares the first public preview; it does not implement production mailbox processing. See [deploy/README.md](deploy/README.md).
+Operational logs report durations, token/cache counts and failure statuses without email text, subjects or credentials. Schema changes live in versioned SQL migrations; validate them on an expiring Neon branch before production.

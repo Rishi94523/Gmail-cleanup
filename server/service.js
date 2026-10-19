@@ -34,8 +34,8 @@ export class InboxService {
     const agent = input.agent ? { ...existingAgent, ...input.agent } : existingAgent;
     const rules = { ...validateRules(input), aiConsentProvider: input.aiConsentProvider || '', ...(agent ? { agent: preferences(agent) } : {}) };
     if ((rules.agent?.enabled || rules.aiEnabled) && !this.config.aiKey) throw new Error(missingAIKey(this.config));
-    if (rules.agent?.enabled && rules.agent.consentProvider !== (this.config.aiProvider || 'openrouter')) throw new Error('Confirm AI processing for the selected provider in Preferences.');
-    if (rules.aiEnabled && rules.aiConsentProvider !== (this.config.aiProvider || 'openrouter')) throw new Error('Confirm AI processing for the selected provider before enabling advanced AI review.');
+    if (rules.agent?.enabled && rules.agent.consentProvider !== (this.config.aiProvider || 'nebius')) throw new Error('Confirm AI processing for the selected provider in Preferences.');
+    if (rules.aiEnabled && rules.aiConsentProvider !== (this.config.aiProvider || 'nebius')) throw new Error('Confirm AI processing for the selected provider before enabling advanced AI review.');
     await this.store.transaction(async tx => {
       await tx.run('UPDATE accounts SET rules=? WHERE id=?', JSON.stringify(rules), id);
       await tx.run("UPDATE plans SET status='expired' WHERE account_id=? AND status='ready'", id);
@@ -56,6 +56,8 @@ export class InboxService {
       const headers = headersOf(message); if (!headers['list-unsubscribe']) continue;
       const sender = senderAddress(headers.from); const url = unsubscribeUrl(headers);
       await this.store.run("INSERT INTO subscriptions(account_id,sender,message_id,host,status) VALUES(?,?,?,?,?) ON CONFLICT(account_id,sender) DO UPDATE SET message_id=excluded.message_id,host=excluded.host,status=excluded.status WHERE subscriptions.status IN ('review','manual')", id, sender, message.id, url?.hostname || null, url ? 'review' : 'manual');
+      const displayName = (headers.from || '').replace(/\s*<[^>]*>.*$/, '').trim().replace(/^"|"$/g, '');
+      await this.store.run('UPDATE subscriptions SET payload=? WHERE account_id=? AND sender=?', this.crypto.seal({ displayName: displayName && displayName !== sender ? displayName.slice(0, 160) : sender, subject: (headers.subject || '(No subject)').slice(0, 240), listName: (headers['list-id'] || '').split('<')[0].trim().slice(0, 120) }), id, sender);
     }
   }
   async discover(id) { return this.locked(id, async () => {
@@ -156,7 +158,7 @@ export class InboxService {
     }
     await this.store.run("UPDATE runs SET status='undone' WHERE id=?", runId); return { restored };
   }); }
-  async unsubscribe(id, sender) { return this.locked(id, async () => {
+  async unsubscribe(id, sender, post = postUnsubscribe) { return this.locked(id, async () => {
     const row = await this.store.get('SELECT * FROM subscriptions WHERE account_id=? AND sender=?', id, sender);
     if (!row || row.status !== 'review') throw new Error('This subscription needs manual review, or a request was already submitted.');
     const gmail = this.client(await this.account(id)); const message = await metadata(gmail, row.message_id); const headers = headersOf(message);
@@ -165,7 +167,7 @@ export class InboxService {
     if (!url || url.hostname !== row.host) throw new Error('One-click unsubscribe is no longer available. Review this sender in Gmail.');
     await this.store.run("UPDATE subscriptions SET status='uncertain' WHERE account_id=? AND sender=?", id, sender);
     try {
-      await postUnsubscribe(url);
+      await post(url);
       await this.store.run("UPDATE subscriptions SET status='requested' WHERE account_id=? AND sender=?", id, sender);
       await this.store.run("INSERT INTO runs(id,account_id,kind,status,total,detail,created) VALUES(?,?,'unsubscribe','requested',1,?,?)", randomUUID(), id, `Request accepted for ${sender}. The sender may take time to stop mail.`, Date.now());
       return { status: 'requested' };

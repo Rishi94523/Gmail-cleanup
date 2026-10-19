@@ -12,11 +12,12 @@
     "db:migrate": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/migrate.mjs",
     "build:web": "vite build --config web/vite.config.ts",
     "check:web": "tsc -p web/tsconfig.json",
-    "start:preview": "node server/preview.js",
     "setup": "node scripts/setup.mjs",
     "start": "node --env-file-if-exists=.env --env-file-if-exists=.env.local server/index.js",
     "dev": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --watch server/index.js",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "qa:landing": "node scripts/qa-landing.mjs",
+    "qa:agent": "node scripts/qa-agent.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
@@ -30,6 +31,7 @@
   "dependencies": {
     "@neon/config": "^1.9.2",
     "@neon/env": "^1.6.3",
+    "google-auth-library": "^11.3.1",
     "pg": "^8.23.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

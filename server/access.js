@@ -5,6 +5,7 @@ export const FREE_EMAIL_LIMIT = 100;
 const key = value => createHash('sha256').update(value).digest('hex');
 export const TRIAL_REPAIR_VERSION = 'body-discovery-batches-v2';
 export async function accessFor(service, id) {
+  if (service.config.hackathonMode) return { tier: 'hackathon', limit: 100, used: 0, remaining: 100, dailyAllowed: true, discoveryUsed: false, recoveryAvailable: false, recovering: false };
   const accountKey = key(id);
   await service.store.run("INSERT INTO account_access(account_key,tier,free_used,discovery_used) VALUES(?,'free',0,0) ON CONFLICT DO NOTHING", accountKey);
   const row = await service.store.get('SELECT tier,free_used,discovery_used FROM account_access WHERE account_key=?', accountKey);

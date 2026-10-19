@@ -30,6 +30,7 @@ export function openStore(directory = 'data') {
     CREATE TABLE IF NOT EXISTS free_email_usage (account_key TEXT NOT NULL, message_key TEXT NOT NULL, PRIMARY KEY(account_key,message_key));
     CREATE TABLE IF NOT EXISTS trial_samples (account_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
   `);
+  if (!db.prepare('PRAGMA table_info(subscriptions)').all().some(column => column.name === 'payload')) db.exec('ALTER TABLE subscriptions ADD COLUMN payload TEXT');
   return {
     kind: 'sqlite',
     db,

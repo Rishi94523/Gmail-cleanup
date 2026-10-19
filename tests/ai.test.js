@@ -3,20 +3,17 @@ import assert from 'node:assert/strict';
 import { aiConfig, chatJSON } from '../server/ai.js';
 import { ASK_PREFERENCE_TOOL } from '../server/learning.js';
 
-test('provider flag isolates keys and model settings; legacy settings apply only to OpenRouter', () => {
-  const env = { NEBIUS_API_KEY: 'nebius-fixture', AI_API_KEY: 'legacy-router-fixture', AI_MODEL: 'legacy/model' };
-  assert.deepEqual(aiConfig({ ...env, AI_PROVIDER: 'nebius' }), { aiProvider: 'nebius', aiKey: 'nebius-fixture', aiModel: 'nvidia/Nemotron-3.5-Super-VL' });
-  assert.deepEqual(aiConfig(env), { aiProvider: 'openrouter', aiKey: 'legacy-router-fixture', aiModel: 'legacy/model' });
-  assert.equal(aiConfig({ ...env, OPENROUTER_API_KEY: 'preferred-fixture', OPENROUTER_MODEL: 'another/model' }).aiKey, 'preferred-fixture');
-  assert.equal(aiConfig({ AI_PROVIDER: 'nebius', OPENROUTER_API_KEY: 'router-fixture' }).aiKey, '');
-  assert.throws(() => aiConfig({ AI_PROVIDER: 'unknown' }), /AI_PROVIDER/);
+test('hackathon transport accepts only Nebius credentials and models', () => {
+  assert.deepEqual(aiConfig({ NEBIUS_API_KEY: 'fixture' }), { aiProvider: 'nebius', aiKey: 'fixture', aiModel: 'nvidia/Nemotron-3.5-Super-VL' });
+  assert.equal(aiConfig({ AI_API_KEY: 'unused', OPENROUTER_API_KEY: 'unused' }).aiKey, '');
+  assert.throws(() => aiConfig({ AI_PROVIDER: 'openrouter' }), /Nebius.*only/);
 });
-for (const provider of ['nebius', 'openrouter']) test(`${provider} requests use the selected endpoint, model, bearer key and JSON contract`, async () => {
+for (const provider of ['nebius']) test(`${provider} requests use the selected endpoint, model, bearer key and JSON contract`, async () => {
   const config = aiConfig({ AI_PROVIDER: provider, NEBIUS_API_KEY: 'nebius-fixture', OPENROUTER_API_KEY: 'router-fixture' });
   let calls = 0;
   const result = await chatJSON(config, [{ role: 'user', content: 'Return JSON.' }], async (url, options) => {
     calls++;
-    assert.equal(url, provider === 'nebius' ? 'https://api.tokenfactory.us-north1.nebius.com/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions');
+    assert.equal(url, 'https://api.tokenfactory.us-north1.nebius.com/v1/chat/completions');
     assert.equal(options.headers.Authorization, `Bearer ${config.aiKey}`);
     const body = JSON.parse(options.body); assert.equal(body.model, config.aiModel); assert.equal(body.response_format.type, 'json_object');
     assert.equal(body.max_tokens, 50000);
@@ -32,7 +29,7 @@ test('provider errors never leak raw bodies or keys and never fallback to anothe
   assert.equal(calls, 1);
   await assert.rejects(chatJSON(config, [], async () => { throw new Error('secret-fixture-value'); }), error => !error.message.includes('secret-fixture-value'));
 });
-for (const provider of ['nebius', 'openrouter']) test(`${provider} preference tool calls use 50,000 output tokens and retain default reasoning`, async () => {
+for (const provider of ['nebius']) test(`${provider} preference tool calls use 50,000 output tokens and retain default reasoning`, async () => {
   const config = aiConfig({ AI_PROVIDER: provider, NEBIUS_API_KEY: 'fixture', OPENROUTER_API_KEY: 'fixture' });
   const args = { category: 'product_announcements', question: 'How should I handle product announcements?', reason: 'Preference unknown.' };
   const result = await chatJSON(config, [], async (_url, options) => {

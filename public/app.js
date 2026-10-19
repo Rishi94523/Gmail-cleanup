@@ -58,7 +58,7 @@ function renderRules() {
   $('#rule-protected').value = rules.protectedSenders.join('\n'); $('#rule-daily').checked = rules.daily;
   $('#rule-hour').value = rules.hour;
   if (!$$('#rule-zone option').some(option => option.value === rules.timezone)) $('#rule-zone').add(new Option(rules.timezone, rules.timezone));
-  $('#rule-zone').value = rules.timezone; $('#rule-ai').checked = rules.aiEnabled && rules.aiConsentProvider === (state.aiProvider || 'openrouter');
+  $('#rule-zone').value = rules.timezone; $('#rule-ai').checked = rules.aiEnabled && rules.aiConsentProvider === (state.aiProvider || 'nebius');
   $('#rule-ai').disabled = !state.aiConfigured;
   $('#ai-status').textContent = state.aiConfigured ? 'Enable only if you agree to AI processing.' : 'AI assistance is temporarily unavailable. You can still save your preferences.';
   $('#connection-settings-copy').textContent = state.connected ? `Connected as ${state.email}` : 'Connect Gmail to save your preferences.';
@@ -72,13 +72,14 @@ function renderActivity() {
   };
   $('#recent-activity').innerHTML = state.runs.length ? state.runs.slice(0, 3).map(renderRun).join('') : empty('Your fresh start is waiting.', 'Once you run a cleanup, you’ll see what changed here. Every action has a paper trail.');
   $('#activity-list').innerHTML = state.runs.length ? state.runs.map(renderRun).join('') : empty('Nothing moved. Nothing missed.', 'Your cleanups, daily routines, and unsubscribe requests will appear here.');
-  $('#daily-error').hidden = !state.lastError; $('#daily-error').textContent = state.lastError ? `Daily agent needs attention: ${state.lastError}` : '';
+  $('#daily-error').hidden = !state.lastError; $('#daily-error').textContent = state.lastError ? `Daily agent needs attention: ${customerMessage(state.lastError)}` : '';
 }
 function renderSubscriptions() {
   $('#subscription-count').textContent = state.subscriptions.filter(s => ['review', 'manual'].includes(s.status)).length;
-  const statuses = { review: 'One-click available · approval required', manual: 'Manual review in Gmail', requested: 'Request submitted · allow time for the sender', uncertain: 'Completion unknown · check before retrying' };
-  $('#subscriptions-list').innerHTML = state.subscriptions.length ? state.subscriptions.map(sub => `<div class="list-row"><span class="row-icon" aria-hidden="true">${escape(sub.sender[0]?.toUpperCase() || '@')}</span><div class="row-main"><strong>${escape(sub.sender)}</strong><p>${escape(statuses[sub.status] || sub.status)}</p>${sub.host ? `<small>Request destination: ${escape(sub.host)}</small>` : ''}</div><div class="row-side">${sub.status === 'review' ? `<button class="secondary" data-unsubscribe="${escape(sub.sender)}">Review unsubscribe ↗</button>` : `<a class="text-button" href="https://mail.google.com/mail/u/0/#search/${encodeURIComponent(`from:(${sub.sender})`)}" target="_blank" rel="noopener noreferrer">Review in Gmail ↗</a>`}</div></div>`).join('') : empty('Make space for the good mail.', 'Find subscriptions to inspect the latest 100 inbox messages. Repeat later to discover more senders.');
+  const statuses = { review: 'One-click unsubscribe available', manual: 'Needs the sender’s unsubscribe page', requested: 'Request accepted · delivery may take a few days to stop', uncertain: 'Request outcome unknown · not retried automatically' };
+  $('#subscriptions-list').innerHTML = state.subscriptions.length ? state.subscriptions.map(sub => `<div class="list-row"><span class="row-icon" aria-hidden="true">${escape((sub.displayName || sub.sender)[0]?.toUpperCase() || '@')}</span><div class="row-main"><strong>${escape(sub.displayName || sub.sender)}</strong><p>${escape(sub.sender)}${sub.listName ? ` · ${escape(sub.listName)}` : ''}</p>${sub.subject ? `<p class="subscription-example">Recent email: ${escape(sub.subject)}</p>` : '<p class="subscription-example">Refresh subscriptions to see an example email.</p>'}<small>${escape(statuses[sub.status] || sub.status)}</small></div><div class="row-side">${sub.status === 'review' ? `<button class="text-button" data-unsubscribe="${escape(sub.sender)}">Unsubscribe →</button>` : ''}<a class="text-button" href="https://mail.google.com/mail/u/0/#search/${encodeURIComponent('from:' + sub.sender)}" target="_blank" rel="noopener noreferrer">View emails ↗</a></div></div>`).join('') : empty('Your subscriptions will appear here.', 'Find senders with an unsubscribe option. Review a familiar name and example before leaving a list.');
 }
+
 function renderPreview() {
   $('#preview-section').hidden = !plan;
   $('#cleanup-approval').hidden = true; approval = null;
@@ -135,7 +136,7 @@ async function refresh(mailbox = false) {
   queueMicrotask(() => maybeDiscover());
 }
 function rulesInput() {
-  return { days: Number($('#rule-days').value), categories: $$('input[name=category]:checked').map(input => input.value), archive: $('#rule-archive').checked, markRead: $('#rule-read').checked, protectedSenders: $('#rule-protected').value.split(/[\n,]+/).map(s => s.trim()).filter(Boolean), daily: $('#rule-daily').checked, hour: Number($('#rule-hour').value), timezone: $('#rule-zone').value, aiEnabled: $('#rule-ai').checked, aiConsentProvider: $('#rule-ai').checked ? (state.aiProvider || 'openrouter') : '' };
+  return { days: Number($('#rule-days').value), categories: $$('input[name=category]:checked').map(input => input.value), archive: $('#rule-archive').checked, markRead: $('#rule-read').checked, protectedSenders: $('#rule-protected').value.split(/[\n,]+/).map(s => s.trim()).filter(Boolean), daily: $('#rule-daily').checked, hour: Number($('#rule-hour').value), timezone: $('#rule-zone').value, aiEnabled: $('#rule-ai').checked, aiConsentProvider: $('#rule-ai').checked ? (state.aiProvider || 'nebius') : '' };
 }
 for (let i = 0; i < 24; i++) $('#rule-hour').add(new Option(`${String(i).padStart(2, '0')}:00`, i));
 $$('[data-page]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.page)));
@@ -167,11 +168,11 @@ document.addEventListener('click', event => {
   if (button.id === 'next-batch' && plan) operation(button, 'Reviewing next batch…', async () => { await request('/api/scan', { nextPlanId: plan.id }); await refresh(); toast('Next batch loaded. The previous batch was left unchanged.'); });
   if (button.dataset.unsubscribe) {
     const sub = state.subscriptions.find(s => s.sender === button.dataset.unsubscribe); if (!sub || busy) return;
-    $('#unsubscribe-approval').innerHTML = `<h3>Leave this mailing list?</h3><p>Send a one-click unsubscribe request for <strong>${escape(sub.sender)}</strong> to <strong>${escape(sub.host)}</strong>. This contacts the sender and cannot be undone by restoring email. Delivery may take time to stop.</p><div class="approval-actions"><button class="primary" data-confirm-unsubscribe="${escape(sub.sender)}">Send unsubscribe request ↗</button><button class="text-button" id="cancel-unsubscribe">Keep subscription</button></div>`;
+    $('#unsubscribe-approval').innerHTML = `<h3>Unsubscribe from ${escape(sub.displayName || sub.sender)}?</h3><p>Send an unsubscribe request for <strong>${escape(sub.sender)}</strong>. This uses the unsubscribe service provided in the sender’s email. It may take a few days for emails to stop. This does not delete any email.</p><div class="approval-actions"><button class="primary" data-confirm-unsubscribe="${escape(sub.sender)}">Confirm unsubscribe →</button><button class="text-button" id="cancel-unsubscribe">Keep subscription</button></div>`;
     $('#unsubscribe-approval').hidden = false; $('#unsubscribe-approval').scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
   if (button.id === 'cancel-unsubscribe') $('#unsubscribe-approval').hidden = true;
-  if (button.dataset.confirmUnsubscribe) operation(button, 'Submitting request…', async () => { await request('/api/unsubscribe', { sender: button.dataset.confirmUnsubscribe }); $('#unsubscribe-approval').hidden = true; await refresh(); toast('The sender accepted your unsubscribe request. Allow time for mail to stop.'); });
+  if (button.dataset.confirmUnsubscribe) operation(button, 'Submitting request…', async () => { await request('/api/unsubscribe', { sender: button.dataset.confirmUnsubscribe }); $('#unsubscribe-approval').hidden = true; await refresh(); toast('Unsubscribe request accepted. The sender may take a few days to stop delivery.'); });
   if (button.dataset.undo) {
     if (busy) return;
     showPage('activity');
@@ -197,7 +198,7 @@ const agentDefaults = { enabled: false, consent: false, consentProvider: '', kee
 for (let hour = 0; hour < 24; hour++) $('#pref-hour').add(new Option(`${String(hour).padStart(2, '0')}:00`, hour));
 function renderAgentControls() {
   const p = { ...agentDefaults, ...state.rules.agent };
-  const consentMatches = p.consentProvider === (state.aiProvider || 'openrouter');
+  const consentMatches = p.consentProvider === (state.aiProvider || 'nebius');
   $('#agent-start').disabled = (state.access?.tier === 'free' && !state.access.remaining) || busy || !state.connected || !state.aiConfigured || !p.enabled || !consentMatches;
   $('#agent-learn').disabled = busy || !state.connected || !state.aiConfigured || !$('#agent-consent').checked;
   $('#save-preferences').disabled = busy || !state.connected;
@@ -209,17 +210,17 @@ function renderAgentControls() {
   $('#agent-consent-description').textContent = 'Allows our AI service to analyze sender details, subjects and email text to make cleanup decisions. Attachments are excluded.';
   const free = state.access?.tier === 'free';
   $('#agent-start').textContent = free ? (state.access.remaining ? `Clean up to ${state.access.remaining} emails →` : 'Free cleanup used') : 'Start my agent →';
-  $('.agent-budget').textContent = free ? `Free cleanup: ${state.access.used} of 100 Primary emails processed. Daily and additional cleanups are for paid plans. Paid plans are not on sale yet.` : 'Each run processes up to 500 unread messages in Primary. Nothing is deleted.';
+  $('.agent-budget').textContent = free ? `Free cleanup: ${state.access.used} of 100 Primary emails processed. Daily and additional cleanups are for paid plans. Paid plans are not on sale yet.` : `Each run checks up to ${state.access?.limit || 500} unread messages in Primary. Daily cleanup is included. Nothing is deleted.`;
   $('#save-preferences').textContent = free && state.access.remaining ? 'Save & start free cleanup →' : 'Save preferences →';
   $('#rule-daily').disabled = free || !state.schedulerActive;
   $('#pref-action').closest('.preference-card').hidden = Boolean(p.topicActions);
   $('#pref-daily').disabled = free || !state.schedulerActive;
-  $('#agent-schedule-note').textContent = free ? 'Daily cleanup is reserved for paid plans. Your free first cleanup covers up to 100 emails.' : state.schedulerActive ? 'Runs at your chosen time, even when your browser is closed.' : 'Daily cleanup is currently unavailable. You can still start a cleanup yourself.';
+  $('#agent-schedule-note').textContent = free ? 'Daily cleanup is reserved for paid plans. Your free first cleanup covers up to 100 emails.' : state.schedulerActive ? 'Runs at your chosen time, even when your browser is closed.' : 'Daily cleanup needs to be connected. You can still start a cleanup yourself.';
 }
 function renderAgentPreferences() {
   const p = { ...agentDefaults, ...state.rules.agent };
   for (const [key, id] of [['consent','agent-consent'], ['keepJobs','pref-jobs'], ['keepPeople','pref-people'], ['keepNewsletters','pref-newsletters'], ['autoUnsubscribe','pref-auto-unsubscribe']]) $(`#${id}`).checked = p[key];
-  if (p.consentProvider !== (state.aiProvider || 'openrouter')) $('#agent-consent').checked = false;
+  if (p.consentProvider !== (state.aiProvider || 'nebius')) $('#agent-consent').checked = false;
   for (const [key, id] of [['coldMail','pref-cold'], ['action','pref-action'], ['exceptions','pref-exceptions'], ['interests','pref-interests']]) $(`#${id}`).value = p[key];
   $('#pref-daily').checked = state.rules.daily; $('#pref-hour').value = state.rules.hour; $('#pref-zone').value = state.rules.timezone;
   renderExceptions();
@@ -230,7 +231,7 @@ function maybeDiscover() {
   if (document.body.classList.contains('booting') || onboarding.active || !state?.connected || !state.aiConfigured || busy || discoveryStarted || learningState.discovery || !$('#agent-consent').checked) return;
   discoveryStarted = true;
   operation($('#agent-learn'), 'Learning your inbox…', async () => {
-  const learned = await request('/api/agent/learn', { consent: $('#agent-consent').checked, provider: state.aiProvider || 'openrouter' });
+  const learned = await request('/api/agent/learn', { consent: $('#agent-consent').checked, provider: state.aiProvider || 'nebius' });
   renderDiscovery(learned); await loadLearning();
   });
 }
@@ -238,8 +239,8 @@ $('#agent-learn').addEventListener('click', () => { discoveryStarted = false; le
 $('#preferences-form').addEventListener('submit', event => {
   event.preventDefault();
   const consent = $('#agent-consent').checked;
-  const agent = { ...state.rules.agent, consent, consentProvider: consent ? (state.aiProvider || 'openrouter') : '', enabled: consent && state.aiConfigured, keepJobs: $('#pref-jobs').checked, keepPeople: $('#pref-people').checked, keepNewsletters: $('#pref-newsletters').checked, autoUnsubscribe: $('#pref-auto-unsubscribe').checked, coldMail: $('#pref-cold').value, action: $('#pref-action').value, exceptions: $('#pref-exceptions').value, interests: $('#pref-interests').value };
-  const rules = { ...state.rules, agent, aiEnabled: state.rules.aiEnabled && state.rules.aiConsentProvider === (state.aiProvider || 'openrouter'), daily: agent.enabled && state.schedulerActive && $('#pref-daily').checked, hour: Number($('#pref-hour').value), timezone: $('#pref-zone').value };
+  const agent = { ...state.rules.agent, consent, consentProvider: consent ? (state.aiProvider || 'nebius') : '', enabled: consent && state.aiConfigured, keepJobs: $('#pref-jobs').checked, keepPeople: $('#pref-people').checked, keepNewsletters: $('#pref-newsletters').checked, autoUnsubscribe: $('#pref-auto-unsubscribe').checked, coldMail: $('#pref-cold').value, action: $('#pref-action').value, exceptions: $('#pref-exceptions').value, interests: $('#pref-interests').value };
+  const rules = { ...state.rules, agent, aiEnabled: state.rules.aiEnabled && state.rules.aiConsentProvider === (state.aiProvider || 'nebius'), daily: agent.enabled && state.schedulerActive && $('#pref-daily').checked, hour: Number($('#pref-hour').value), timezone: $('#pref-zone').value };
   operation($('#save-preferences'), 'Saving…', async () => { await request('/api/rules', rules); await refresh(); if (agent.enabled && state.access?.tier === 'free' && state.access.remaining) { if (learningState.questions.length) { showPage('questions'); toast('Answer your setup questions, then start your free cleanup from Overview.'); } else { showPage('overview'); await startAgent(); } } else { showPage('overview'); toast(agent.enabled ? 'Preferences saved. Start your agent when you’re ready.' : 'Preferences saved. Your agent is paused.'); } });
 });
 async function startAgent(onEvent = () => {}) {

@@ -37,7 +37,7 @@ export async function classify(messages, rules, config) {
   const decisions = messages.map(message => ({ id: message.id, sender: senderAddress(headersOf(message).from), subject: headersOf(message).subject || '(No subject)', date: Number(message.internalDate), labels: message.labelIds, reason: protectedReason(message, rules), source: 'Saved rules', approved: true }));
   if (!rules.aiEnabled) return decisions;
   if (!config.aiKey) throw new Error(missingAIKey(config));
-  if (rules.aiConsentProvider !== (config.aiProvider || 'openrouter')) throw new Error('AI provider changed. Confirm AI processing again before reviewing email.');
+  if (rules.aiConsentProvider !== (config.aiProvider || 'nebius')) throw new Error('AI provider changed. Confirm AI processing again before reviewing email.');
   const eligible = decisions.filter(d => !d.reason);
   for (let offset = 0; offset < eligible.length; offset += 30) {
     const batch = eligible.slice(offset, offset + 30);

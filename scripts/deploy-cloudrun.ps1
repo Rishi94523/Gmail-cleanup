@@ -26,7 +26,7 @@ if (-not $repository) { Invoke-Gcloud artifacts repositories create gmail-cleanu
 $runtimeAccount = "gmail-cleanup-web@${ProjectId}.iam.gserviceaccount.com"
 $accounts = & gcloud.cmd iam service-accounts list --project=$ProjectId --filter="email:$runtimeAccount" --format='value(email)'
 if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the runtime identity.' }
-if (-not $accounts) { Invoke-Gcloud iam service-accounts create gmail-cleanup-web --project=$ProjectId --display-name='Gmail cleanup public preview' }
+if (-not $accounts) { Invoke-Gcloud iam service-accounts create gmail-cleanup-web --project=$ProjectId --display-name='Inboxclean web service' }
 $buildAccount = "gmail-cleanup-build@${ProjectId}.iam.gserviceaccount.com"
 $buildAccounts = & gcloud.cmd iam service-accounts list --project=$ProjectId --filter="email:$buildAccount" --format='value(email)'
 if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the build identity.' }
@@ -49,12 +49,12 @@ $bindings = Get-Content -LiteralPath data/cloud-run-bindings.json -Raw | Convert
 $projectNumber = & gcloud.cmd projects describe $ProjectId --format='value(projectNumber)'
 if ($LASTEXITCODE -ne 0) { throw 'Could not resolve project number.' }
 $appUrl = "https://gmail-cleanup-web-${projectNumber}.${Region}.run.app"
-$environment = "APP_URL=$appUrl,HOST=0.0.0.0,SERVE_LANDING=true,ENABLE_LOCAL_SCHEDULER=false,AI_PROVIDER=$($bindings.provider)"
-if ($bindings.provider -eq 'nebius') { $environment += ",NEBIUS_MODEL=$($bindings.model)" } else { $environment += ",OPENROUTER_MODEL=$($bindings.model)" }
+$environment = "APP_URL=$appUrl,HOST=0.0.0.0,SERVE_LANDING=true,ENABLE_LOCAL_SCHEDULER=false,HACKATHON_MODE=true,NEBIUS_MODEL=$($bindings.model)"
 Invoke-Gcloud run deploy gmail-cleanup-web --image=$image --project=$ProjectId --region=$Region --service-account=$runtimeAccount --allow-unauthenticated --port=8080 --cpu=1 --memory=512Mi --min-instances=0 --max-instances=2 --concurrency=8 --timeout=3600s --cpu-throttling "--set-env-vars=$environment" "--set-secrets=$($bindings.secrets)"
 $siteUrl = & gcloud.cmd run services describe gmail-cleanup-web --project=$ProjectId --region=$Region --format='value(status.url)'
 if ($LASTEXITCODE -ne 0 -or -not $siteUrl) { throw 'Deployment returned no service URL. Inspect Cloud Run status before retrying.' }
 $health = Invoke-RestMethod -Uri "$appUrl/api/health" -TimeoutSec 60
 if ($health.stage -ne 'gmail-agent' -or -not $health.gmailConfigured -or -not $health.aiConfigured -or -not $health.connected) { throw 'Unexpected deployment health response.' }
 Write-Output "Verified Gmail agent and Neon database: $appUrl/app"
-Write-Output 'Free cleanup is limited to 100 emails. Daily jobs remain disabled; paid checkout is not enabled.'
+& (Join-Path $PSScriptRoot 'deploy-scheduler.ps1') -ProjectId $ProjectId -Region $Region
+if ($LASTEXITCODE -ne 0) { throw 'The app is deployed, but scheduler setup needs attention.' }

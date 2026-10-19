@@ -5,7 +5,7 @@ import { aiConfig } from '../server/ai.js';
 const project = process.argv[2];
 if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(project || '')) throw new Error('A valid project ID is required.');
 const provider = aiConfig();
-const names = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'TOKEN_ENCRYPTION_KEY', 'DATABASE_URL', provider.aiProvider === 'nebius' ? 'NEBIUS_API_KEY' : 'OPENROUTER_API_KEY'];
+const names = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'TOKEN_ENCRYPTION_KEY', 'DATABASE_URL', 'NEBIUS_API_KEY'];
 const values = Object.fromEntries(names.map(name => [name, name.endsWith('API_KEY') ? provider.aiKey : process.env[name]]));
 if (names.some(name => !values[name])) throw new Error('Gmail, encryption, database, and selected AI credentials must be configured locally before deployment.');
 function gcloud(args, input) {

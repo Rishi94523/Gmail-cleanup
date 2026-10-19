@@ -44,6 +44,7 @@ export async function automaticUnsubscribe(service, id, message, guard, expected
   const url = unsubscribeUrl(headersOf(fresh)); if (!url || !scope.listId) throw new Error('Supported one-click unsubscribe is not available.');
   const latest = await service.account(id);
   if (JSON.stringify(latest.rules) !== JSON.stringify(expectedRules)) throw new Error('Preferences changed; no unsubscribe request was sent.');
+  await service.recordSubscriptions(id, [message]);
   await guard();
   const claimed = await service.store.run("INSERT INTO subscription_actions(account_id,list_key,message_id,status,created) VALUES(?,?,?,'uncertain',?) ON CONFLICT DO NOTHING", id, scope.scopeHash, message.id, Date.now());
   if (!claimed.changes) return { requested: false, reason: 'A request for this list was already submitted or needs checking' };

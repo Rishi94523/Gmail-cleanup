@@ -19,7 +19,7 @@ export function preferences(input = {}) {
   if (!['all', 'exceptional', 'none'].includes(p.coldMail) || !['read', 'archive', 'both'].includes(p.action)) throw new Error('Choose a supported agent action.');
   for (const key of ['exceptions', 'interests']) if (typeof p[key] !== 'string' || p[key].length > 2000) throw new Error('Keep preference notes under 2,000 characters.');
   if (p.enabled && !p.consent) throw new Error('Allow AI processing before enabling the agent.');
-  if (!['', 'openrouter', 'nebius'].includes(p.consentProvider)) throw new Error('Invalid consent provider.');
+  if (!['', 'nebius'].includes(p.consentProvider)) throw new Error('Invalid consent provider.');
   p.exceptionsRules = validateExceptions(p.exceptionsRules);
   return Object.fromEntries(Object.keys(DEFAULT_PREFERENCES).map(key => [key, p[key]]));
 }
@@ -94,7 +94,7 @@ async function knownPerson(gmail, sender, cache) {
 }
 export async function learnInbox(service, id, consent, provider) {
   if (consent !== true) throw new Error('Allow AI processing to learn inbox preferences.');
-  if (provider !== (service.config.aiProvider || 'openrouter')) throw new Error('AI provider changed. Reload Preferences and confirm AI processing again.');
+  if (provider !== (service.config.aiProvider || 'nebius')) throw new Error('AI provider changed. Reload Preferences and confirm AI processing again.');
   const account = await service.account(id); const gmail = service.client(account);
   if (!service.config.aiKey) throw new Error(missingAIKey(service.config));
   const access = await accessFor(service, id);
@@ -106,8 +106,9 @@ export async function learnInbox(service, id, consent, provider) {
     if (cached && service.crypto.open(cached.payload).evidenceCategories) return service.crypto.open(cached.payload);
     if (!cached && ((access.discoveryUsed && !access.recovering) || !access.remaining)) throw new Error('Your free inbox discovery has already been used. You can still set preferences yourself.');
   }
-  const initial = access.tier === 'free' && (access.used === 0 || access.recovering);
-  const list = access.tier === 'free' ? { messages: (await trialSample(service, id, gmail)).ids.map(id => ({ id })) } : await gmail(`messages?${new URLSearchParams({ maxResults: '100', q: PRIMARY_INBOX_QUERY })}`);
+  const firstHackathonRun = access.tier === 'hackathon' && !(await service.store.get("SELECT count(*) AS total FROM runs WHERE account_id=? AND kind IN ('cleanup','daily')", id)).total;
+  const initial = (access.tier === 'free' && (access.used === 0 || access.recovering)) || firstHackathonRun;
+  const list = access.tier === 'free' || firstHackathonRun ? { messages: (await trialSample(service, id, gmail)).ids.map(id => ({ id })) } : await gmail(`messages?${new URLSearchParams({ maxResults: '100', q: PRIMARY_INBOX_QUERY })}`);
   if (!cached && access.tier === 'free' && !await reserveDiscovery(service, id)) throw new Error('Free discovery already started. Set preferences yourself if it was interrupted.');
   const source = new Map();
   const sample = await mapLimit(list.messages || [], 6, async ({ id: messageId }) => {
@@ -178,14 +179,16 @@ export async function learnInbox(service, id, consent, provider) {
 export async function runAgent(service, id, guard, emit = () => {}, mode = 'manual', infer = modelDecision, unsubscribe = automaticUnsubscribe) {
   const account = await service.account(id); const p = preferences(account.rules.agent);
   if (!p.enabled || !p.consent || !service.config.aiKey) throw new Error('Save your preferences and enable AI processing before starting the agent.');
-  if (p.consentProvider !== (service.config.aiProvider || 'openrouter')) throw new Error('AI provider changed. Confirm AI processing again in Preferences before running the agent.');
+  if (p.consentProvider !== (service.config.aiProvider || 'nebius')) throw new Error('AI provider changed. Confirm AI processing again in Preferences before running the agent.');
   const access = await accessFor(service, id);
   if (mode === 'daily') await requirePaid(service, id);
   if (access.tier === 'free' && !access.remaining) throw new Error('Your free 100-email cleanup is complete. Additional and daily cleanups require a paid plan.');
+  const perRunLimit = access.tier === 'hackathon' ? 100 : 500;
+  const firstHackathonRun = access.tier === 'hackathon' && !(await service.store.get("SELECT count(*) AS total FROM runs WHERE account_id=? AND kind IN ('cleanup','daily')", id)).total;
   const gmail = service.client(account); const runId = randomUUID(); const decisions = []; const people = new Map(); const histories = new Map();
   const learnedCategories = await categoryContext(service, id);
   const runClock = clockContext(account.rules.timezone); const runNow = Date.now();
-  const policy = createHash('sha256').update(JSON.stringify({ rules: account.rules, topicPreferences: learnedCategories.memories.map(m => ({ id: m.id, version: m.version })), provider: service.config.aiProvider || 'openrouter', model: service.config.aiModel })).digest('hex');
+  const policy = createHash('sha256').update(JSON.stringify({ rules: account.rules, topicPreferences: learnedCategories.memories.map(m => ({ id: m.id, version: m.version })), provider: service.config.aiProvider || 'nebius', model: service.config.aiModel })).digest('hex');
   let changed = 0; let kept = 0; let waiting = 0; let unsubscribed = 0; let moreAvailable = false;
   await service.store.run("INSERT INTO runs(id,account_id,kind,status,total,created) VALUES(?,?,?,'running',0,?)", runId, id, mode === 'daily' ? 'daily' : 'cleanup', Date.now());
   const send = event => { try { emit(event); } catch {} };
@@ -195,7 +198,7 @@ export async function runAgent(service, id, guard, emit = () => {}, mode = 'manu
     send({ type: 'stage', message: 'Finding unread inbox messages' });
     // Gather IDs before changing labels so Gmail pagination cannot skip shifted results.
     const ids = []; let pageToken; let pages = 0;
-    if (access.tier === 'free') {
+    if (access.tier === 'free' || firstHackathonRun) {
       const sample = await trialSample(service, id, gmail);
       const excluded = access.recovering ? await service.store.all('SELECT message_id FROM changes WHERE account_id=?', id) : await service.store.all("SELECT message_id FROM agent_holds WHERE account_id=? UNION SELECT message_id FROM changes WHERE account_id=? AND status IN ('uncertain','undo_uncertain') UNION SELECT message_id FROM agent_assessments WHERE account_id=? AND policy_hash=?", id, id, id, policy);
       const seen = new Set(excluded.map(row => row.message_id));
@@ -211,7 +214,7 @@ export async function runAgent(service, id, guard, emit = () => {}, mode = 'manu
       for (const messageId of pageIds) if (!seen.has(messageId) && !ids.includes(messageId)) ids.push(messageId);
       pageToken = page.nextPageToken; moreAvailable = Boolean(pageToken);
       pages++; send({ type: 'stage', message: 'Finding unread mail not already assessed', total: ids.length });
-    } while (pageToken && ids.length < 500 && pages < 1000);
+    } while (pageToken && ids.length < perRunLimit && pages < 1000);
     await service.store.run('UPDATE runs SET total=? WHERE id=?', ids.length, runId);
     let cleanedLabel; const prepared = new Map(); const batchDecisions = new Map();
     const prepare = async messageId => {
@@ -235,7 +238,7 @@ export async function runAgent(service, id, guard, emit = () => {}, mode = 'manu
       const input = { preferences: p, learnedPreference: specificMemory ? { scope: specificMemory.scope, action: specificMemory.action, explanation: specificMemory.explanation, instructions: specificMemory.instructions, minAgeDays: specificMemory.minAgeDays } : null, categoryPreferences: learnedCategories.memories.map(m => ({ scope: m.scope, action: m.action, explanation: m.explanation, instructions: m.instructions, minAgeDays: m.minAgeDays })), pendingCategories: learnedCategories.questions.map(q => q.scope_hash.slice(9)), preferenceCategories: [...new Set([...Object.keys(PREFERENCE_CATEGORIES), ...learnedCategories.memories.map(m => m.scope.category), ...learnedCategories.questions.map(q => q.scope_hash.slice(9))])], sender, fromAddress: sender, listId: scope.listId, subject: h.subject, received: message.internalDate, ...emailTiming(message), currentClock: runClock, sensitiveNoticeCategory: sensitiveNoticeKind(message), now: runNow, labels: message.labelIds, text: history.length ? content.slice(0, 6000) : content, history: history.map(m => ({ id: m.id, subject: headersOf(m).subject, text: (emailText(m.payload) || m.snippet || '').slice(0, 1000) })) };
       return { message, h, sender, protect, scope, specificMemory, history, input };
     };
-    for (const [index, messageId] of ids.slice(0, 500).entries()) {
+    for (const [index, messageId] of ids.slice(0, perRunLimit).entries()) {
       await guard();
       if (infer !== modelDecision && access.tier === 'free' && !await reserveFreeEmail(service, id, messageId, access.recovering)) continue;
       const latest = await service.account(id);

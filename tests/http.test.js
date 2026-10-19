@@ -8,9 +8,9 @@ import { request } from 'node:http';
 import { createApp } from '../server/index.js';
 import { DEFAULT_RULES } from '../server/rules.js';
 
-async function setup(t, configured = false, config = {}) {
+async function setup(t, configured = false, config = {}, options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'inboxclean-http-'));
-  const app = await createApp({ dataDir: directory, config: { databaseUrl: '', appUrl: 'http://localhost:3000', encryptionKey: configured ? randomBytes(32).toString('base64') : '', clientId: configured ? 'fixture-client' : '', clientSecret: configured ? 'fixture-secret' : '', ...config } });
+  const app = await createApp({ dataDir: directory, config: { databaseUrl: '', appUrl: 'http://localhost:3000', encryptionKey: configured ? randomBytes(32).toString('base64') : '', clientId: configured ? 'fixture-client' : '', clientSecret: configured ? 'fixture-secret' : '', ...config }, ...options });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${app.server.address().port}`;
   t.after(async () => { await app.close(); rmSync(directory, { recursive: true, force: true }); });
@@ -68,4 +68,21 @@ test('production routing serves landing and dashboard together and protects free
     assert.equal(response.status, 400); assert.match((await response.json()).error, /paid plan/);
   }
   assert.equal(app.store.get('SELECT count(*) AS n FROM runs').n, 0);
+});
+
+test('daily HTTP endpoint verifies scheduler identity without user cookies or CSRF bypass', async t => {
+  const { app, call } = await setup(t, true, { scheduler: false, schedulerAccount: 'cron@example.invalid' });
+  let ticks = 0; app.service.daily = async () => { ticks++; };
+  assert.equal((await call('/internal/scheduler/tick', { method: 'POST' })).status, 401);
+  assert.equal((await call('/internal/scheduler/tick')).status, 405);
+  assert.equal(ticks, 0);
+});
+
+test('verified Cloud Scheduler tick runs maintenance once and rejects a different identity', async t => {
+  const identity = 'cron@example.invalid';
+  const { app, call } = await setup(t, true, { scheduler: false, schedulerAccount: identity }, { verifySchedulerIdentity: async token => ({ email_verified: true, email: token === 'authorized-fixture' ? identity : 'other@example.invalid' }) });
+  let ticks = 0; app.service.daily = async () => { ticks++; };
+  assert.equal((await call('/internal/scheduler/tick', { method: 'POST', headers: { Authorization: 'Bearer wrong-fixture' } })).status, 401);
+  const result = await call('/internal/scheduler/tick', { method: 'POST', headers: { Authorization: 'Bearer authorized-fixture' } });
+  assert.equal(result.status, 200); assert.equal((await result.json()).status, 'completed'); assert.equal(ticks, 1);
 });

@@ -2,22 +2,17 @@
 // Provider changes are explicit: never send mail to a fallback provider on failure.
 import { failure } from './failures.js';
 export function aiConfig(env = process.env) {
-  const aiProvider = (env.AI_PROVIDER || 'openrouter').trim().toLowerCase();
-  if (!['openrouter', 'nebius'].includes(aiProvider)) throw new Error('AI_PROVIDER must be openrouter or nebius.');
-  return {
-    aiProvider,
-    aiKey: (aiProvider === 'nebius' ? env.NEBIUS_API_KEY : (env.OPENROUTER_API_KEY || env.AI_API_KEY))?.trim() || '',
-    aiModel: (aiProvider === 'nebius' ? env.NEBIUS_MODEL : (env.OPENROUTER_MODEL || env.AI_MODEL))?.trim() || (aiProvider === 'nebius' ? 'nvidia/Nemotron-3.5-Super-VL' : 'google/gemini-2.5-flash')
-  };
+  if (env.AI_PROVIDER && env.AI_PROVIDER.trim().toLowerCase() !== 'nebius') throw new Error('This hackathon edition supports Nebius Token Factory only.');
+  return { aiProvider: 'nebius', aiKey: env.NEBIUS_API_KEY?.trim() || '', aiModel: env.NEBIUS_MODEL?.trim() || 'nvidia/Nemotron-3.5-Super-VL' };
 }
-export function aiLabel(config) { return config.aiProvider === 'nebius' ? 'Nebius Token Factory' : 'OpenRouter'; }
-export function missingAIKey(config) { return `Configure ${config.aiProvider === 'nebius' ? 'NEBIUS_API_KEY' : 'OPENROUTER_API_KEY (or AI_API_KEY)'} for ${aiLabel(config)} and restart the server.`; }
+export function aiLabel() { return 'Nebius Token Factory'; }
+export function missingAIKey() { return 'Configure NEBIUS_API_KEY and restart the server.'; }
 export async function chatJSON(config, messages, fetcher = fetch, tools = []) {
-  const provider = config.aiProvider || 'openrouter';
-  if (!['openrouter', 'nebius'].includes(provider)) throw new Error('Unsupported AI provider.');
+  const provider = config.aiProvider || 'nebius';
+  if (provider !== 'nebius') throw new Error('Unsupported AI provider.');
   if (!config.aiKey) throw new Error(missingAIKey(config));
   const region = /^nvidia\/Nemotron-3-Ultra-/i.test(config.aiModel) ? 'us-central1' : 'us-north1';
-  const url = provider === 'nebius' ? `https://api.tokenfactory.${region}.nebius.com/v1/chat/completions` : 'https://openrouter.ai/api/v1/chat/completions';
+  const url = `https://api.tokenfactory.${region}.nebius.com/v1/chat/completions`;
   const started = Date.now();
   let response;
   try {

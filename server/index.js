@@ -14,9 +14,10 @@ import { aiConfig } from './ai.js';
 import { learningTray, answerPreference, editMemory, interpretPreference } from './learning.js';
 import { accessFor, requirePaid, restartTrial } from './access.js';
 import { PREFERENCE_CATEGORIES } from './preference-categories.js';
+import { schedulerAuthorized } from './scheduler.js';
 
 export async function createApp(options = {}) {
-  const config = { port: Number(process.env.PORT || 3000), host: process.env.HOST || '127.0.0.1', appUrl: process.env.APP_URL || 'http://localhost:3000', clientId: process.env.GOOGLE_CLIENT_ID || '', clientSecret: process.env.GOOGLE_CLIENT_SECRET || '', encryptionKey: process.env.TOKEN_ENCRYPTION_KEY || '', ...aiConfig(), databaseUrl: process.env.DATABASE_URL || '', scheduler: !process.env.K_SERVICE && process.env.ENABLE_LOCAL_SCHEDULER !== 'false', ...options.config };
+  const config = { hackathonMode: process.env.HACKATHON_MODE === 'true', schedulerAccount: process.env.SCHEDULER_SERVICE_ACCOUNT || '', port: Number(process.env.PORT || 3000), host: process.env.HOST || '127.0.0.1', appUrl: process.env.APP_URL || 'http://localhost:3000', clientId: process.env.GOOGLE_CLIENT_ID || '', clientSecret: process.env.GOOGLE_CLIENT_SECRET || '', encryptionKey: process.env.TOKEN_ENCRYPTION_KEY || '', ...aiConfig(), databaseUrl: process.env.DATABASE_URL || '', scheduler: !process.env.K_SERVICE && process.env.ENABLE_LOCAL_SCHEDULER !== 'false', ...options.config };
   config.serveLanding ??= process.env.SERVE_LANDING === 'true' || Boolean(process.env.K_SERVICE);
   const workspace = config.serveLanding ? '/app' : '/';
   const origin = new URL(config.appUrl).origin;
@@ -27,7 +28,7 @@ export async function createApp(options = {}) {
   const ready = Boolean(crypto && config.clientId && config.clientSecret);
   const service = crypto ? new InboxService(store, crypto, config, options.clientFactory) : null;
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
-  const assets = new Map([['/customer-message.js', ['customer-message.js', 'text/javascript']], ['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/onboarding.js', ['onboarding.js', 'text/javascript']], ['/onboarding.css', ['onboarding.css', 'text/css']], ['/preference-answer.js', ['preference-answer.js', 'text/javascript']]]);
+  const assets = new Map([['/favicon.svg', ['favicon.svg', 'image/svg+xml']], ['/customer-message.js', ['customer-message.js', 'text/javascript']], ['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/onboarding.js', ['onboarding.js', 'text/javascript']], ['/onboarding.css', ['onboarding.css', 'text/css']], ['/preference-answer.js', ['preference-answer.js', 'text/javascript']]]);
   function cookie(value, maxAge = 2592000) { return `inboxclean_session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${origin.startsWith('https:') ? '; Secure' : ''}`; }
   function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); }
   function redirect(res, to) { res.writeHead(302, { Location: to }); res.end(); }
@@ -51,6 +52,12 @@ export async function createApp(options = {}) {
     try {
       if (req.headers.host !== new URL(origin).host) return json(res, 403, { error: `Open the app at ${origin}.` });
       url = new URL(req.url, origin);
+      if (url.pathname === '/internal/scheduler/tick') {
+        if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
+        if (!await schedulerAuthorized(req.headers.authorization, config, options.verifySchedulerIdentity)) return json(res, 401, { error: 'Scheduler identity required.' });
+        const result = await tick();
+        return json(res, result.status === 'failed' ? 500 : 200, result);
+      }
       if (url.pathname === '/api/health' && req.method === 'GET') {
         try { await store.get('SELECT 1 AS connected'); return json(res, 200, { database: store.kind, connected: true, gmailConfigured: ready, aiConfigured: Boolean(config.aiKey), stage: 'gmail-agent', freeEmailLimit: 100 }); }
         catch { return json(res, 503, { database: store.kind, connected: false }); }
@@ -64,10 +71,10 @@ export async function createApp(options = {}) {
           store.get("SELECT coalesce(sum(changed),0) AS total FROM runs WHERE account_id=? AND status!='undone'", account.id),
           store.get("SELECT count(*) AS total FROM subscriptions WHERE account_id=? AND status='requested'", account.id),
           store.all("SELECT r.id,r.kind,r.status,r.total,r.changed,r.skipped,r.detail,r.created,EXISTS(SELECT 1 FROM changes c WHERE c.run_id=r.id AND c.account_id=r.account_id AND c.status IN ('applied','uncertain','undo_uncertain')) AS undoable FROM runs r WHERE r.account_id=? ORDER BY r.created DESC LIMIT 30", account.id),
-          store.all('SELECT sender,host,status FROM subscriptions WHERE account_id=? ORDER BY sender LIMIT 200', account.id),
+          store.all('SELECT sender,message_id,host,status,payload FROM subscriptions WHERE account_id=? ORDER BY sender LIMIT 200', account.id),
           service ? service.latestPlan(account.id) : null
         ]) : null;
-        return json(res, 200, { csrf: session.csrf, configured: ready, aiConfigured: Boolean(config.aiKey), aiProvider: config.aiProvider, aiModel: config.aiModel, preferenceCategories: PREFERENCE_CATEGORIES, schedulerActive: Boolean(config.scheduler), connected: Boolean(account), email: account?.email || null, access: account ? await accessFor(service, account.id) : null, rules: account ? JSON.parse(account.rules) : DEFAULT_RULES, lastDay: account?.last_day || null, lastError: account?.last_error || null, totals: details ? { cleaned: details[0].total, requested: details[1].total } : null, setupMissing: [!config.clientId && 'GOOGLE_CLIENT_ID', !config.clientSecret && 'GOOGLE_CLIENT_SECRET', !crypto && 'TOKEN_ENCRYPTION_KEY'].filter(Boolean), plan: details?.[4] || null, runs: details ? details[2].map(run => ({ ...run, undoable: Boolean(run.undoable) })) : [], subscriptions: details?.[3] || [] });
+        return json(res, 200, { csrf: session.csrf, configured: ready, aiConfigured: Boolean(config.aiKey), aiProvider: config.aiProvider, aiModel: config.aiModel, preferenceCategories: PREFERENCE_CATEGORIES, hackathonMode: config.hackathonMode, schedulerActive: Boolean(config.scheduler || config.schedulerAccount), connected: Boolean(account), email: account?.email || null, access: account ? await accessFor(service, account.id) : null, rules: account ? JSON.parse(account.rules) : DEFAULT_RULES, lastDay: account?.last_day || null, lastError: account?.last_error || null, totals: details ? { cleaned: details[0].total, requested: details[1].total } : null, setupMissing: [!config.clientId && 'GOOGLE_CLIENT_ID', !config.clientSecret && 'GOOGLE_CLIENT_SECRET', !crypto && 'TOKEN_ENCRYPTION_KEY'].filter(Boolean), plan: details?.[4] || null, runs: details ? details[2].map(run => ({ ...run, undoable: Boolean(run.undoable) })) : [], subscriptions: (details?.[3] || []).map(({ payload, message_id, ...subscription }) => ({ ...subscription, messageId: message_id, ...(payload ? crypto.open(payload) : {}) })) });
       }
       if (url.pathname === '/auth/google' && req.method === 'GET') {
         if (!ready) return redirect(res, `${workspace}?auth=setup`);
@@ -178,14 +185,15 @@ export async function createApp(options = {}) {
   });
   let ticking = false;
   const tick = async () => {
-    if (!service || ticking) return;
+    if (!service || ticking) return { status: 'busy' };
     ticking = true;
     try {
       await store.run("UPDATE runs SET status='needs_review',detail='Server stopped before completion. Review recorded changes; uncertain writes are not retried.' WHERE status='running' AND account_id NOT IN (SELECT account_id FROM locks WHERE expires>?)", Date.now());
       await store.run("UPDATE plans SET status='needs_review' WHERE status='applying' AND account_id NOT IN (SELECT account_id FROM locks WHERE expires>?)", Date.now());
       await service.daily();
       await store.run('DELETE FROM sessions WHERE expires<?', Date.now()); await store.run('DELETE FROM oauth_states WHERE expires<?', Date.now());
-    } catch { console.error('Daily agent encountered an error; check account activity.'); } finally { ticking = false; }
+      return { status: 'completed' };
+    } catch { console.error('Daily agent encountered an error; check account activity.'); return { status: 'failed' }; } finally { ticking = false; }
   };
   let timer; let tickPromise = Promise.resolve();
   const runTick = () => { if (!ticking) tickPromise = tick(); };

@@ -83,5 +83,5 @@ test('next batch token is stored server-side and scoped to the owning account', 
   await assert.rejects(f.service.scan(f.accountId, 'manual', plan.id), /expired/);
 });
 test('AI cannot be enabled without a configured provider', async t => {
-  const f = fixture(t); await assert.rejects(f.service.saveRules(f.accountId, { ...DEFAULT_RULES, aiEnabled: true }), /AI_API_KEY/);
+  const f = fixture(t); await assert.rejects(f.service.saveRules(f.accountId, { ...DEFAULT_RULES, aiEnabled: true }), /NEBIUS_API_KEY/);
 });

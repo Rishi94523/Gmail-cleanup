@@ -14,7 +14,7 @@ import { accessFor, restartTrial, reserveFreeEmail, trialSample } from '../serve
 function fixture(t, patch = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'inboxclean-agent-')); const store = openStore(dir); const crypto = encryption(randomBytes(32).toString('base64'));
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
-  const id = 'owner@example.invalid'; const rules = { ...DEFAULT_RULES, agent: { ...DEFAULT_PREFERENCES, enabled: true, consent: true, consentProvider: 'openrouter', ...patch } };
+  const id = 'owner@example.invalid'; const rules = { ...DEFAULT_RULES, agent: { ...DEFAULT_PREFERENCES, enabled: true, consent: true, consentProvider: 'nebius', ...patch } };
   store.run('INSERT INTO accounts(id,email,tokens,rules,created) VALUES(?,?,?,?,?)', id, id, crypto.seal({}), JSON.stringify(rules), Date.now());
   const mails = new Map(['noise', 'person', 'uncertain', 'starred'].map(name => [name, { id: name, historyId: '1', internalDate: String(Date.now()), labelIds: ['INBOX', 'UNREAD', ...(name === 'starred' ? ['STARRED'] : [])], payload: { mimeType: 'text/plain', headers: [{ name: 'From', value: `${name}@example.invalid` }, { name: 'Subject', value: 'A message' }], body: { data: Buffer.from(`Content for ${name}`).toString('base64url') } } }]));
   const writes = []; let fail = false;
@@ -71,7 +71,7 @@ test('agent preferences survive saving advanced filters', async t => {
   assert.equal((await f.service.account(f.id)).rules.agent.enabled, true);
 });
 test('switching AI providers requires fresh consent before any agent mail access', async t => {
-  const f = fixture(t); f.service.config.aiProvider = 'nebius';
+  const f = fixture(t); f.rules.agent.consentProvider = ''; f.store.run('UPDATE accounts SET rules=? WHERE id=?', JSON.stringify(f.rules), f.id);
   await assert.rejects(f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', f.infer)), /provider changed/);
   assert.equal(f.writes.length, 0);
   await assert.rejects(f.service.saveRules(f.id, f.rules), /selected provider/);
@@ -116,12 +116,12 @@ test('discovery rejects invented career questions and caches the evidence-backed
   let calls = 0; const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => { calls++; return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ summary: 'Sales recur.', questions: [{ messageId: 'noise', category: 'job_opportunities', question: 'Do you want job emails?', reason: 'Invented career evidence' }, { messageId: 'noise', category: 'sales_discounts', question: 'Do you want sales?', reason: 'A weekend sale appears in the sample.' }] }) } }] }), { status: 200 }); };
   try {
-    const result = await learnInbox(f.service, f.id, true, 'openrouter');
+    const result = await learnInbox(f.service, f.id, true, 'nebius');
     assert.ok(!result.evidenceCategories.includes('job_opportunities'));
     assert.ok(result.evidenceCategories.includes('sales_discounts'));
     const questions = f.store.all('SELECT scope_hash FROM agent_questions');
     assert.deepEqual(questions.map(q => q.scope_hash), ['category:sales_discounts']);
-    assert.deepEqual(await learnInbox(f.service, f.id, true, 'openrouter'), result); assert.equal(calls, 1);
+    assert.deepEqual(await learnInbox(f.service, f.id, true, 'nebius'), result); assert.equal(calls, 1);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -142,7 +142,7 @@ test('discovery can invent an evidence-backed broad topic outside the examples',
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ summary: 'University notices recur.', questions: [{ messageId: 'noise', category: 'topic_university_notices', question: 'How should I handle university notices?', reason: 'Campus notices appear in the sample.', evidenceQuote: 'University campus notices' }, { messageId: 'noise', category: 'topic_invented_messages', question: 'How should I handle invented messages?', reason: 'Not supported.', evidenceQuote: 'This is not in the supplied message' }] }) } }] });
   try {
-    const discovery = await learnInbox(f.service, f.id, true, 'openrouter');
+    const discovery = await learnInbox(f.service, f.id, true, 'nebius');
     assert.ok(discovery.evidenceCategories.includes('topic_university_notices'));
     const questions = f.store.all('SELECT payload FROM agent_questions').map(q => f.crypto.open(q.payload));
     assert.equal(questions.length, 1); assert.equal(questions[0].question, 'How should I handle university notices?');
@@ -217,7 +217,7 @@ test('grouped discovery preserves evidence through alias mapping and topic selec
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(result) } }] });
   };
   try {
-    await learnInbox(f.service, f.id, true, 'openrouter');
+    await learnInbox(f.service, f.id, true, 'nebius');
     const questions = f.store.all('SELECT payload FROM agent_questions').map(row => f.crypto.open(row.payload));
     assert.equal(calls, 5); assert.equal(questions.length, 2);
     assert.ok(questions.every(question => !question.question.includes('brand')));
@@ -239,7 +239,7 @@ test('discovery fetches headers only and never sends bodies or snippets to the m
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ questions: [{ messageId: input[0].id, category: 'topic_body_only_evidence', question: 'How should I handle this topic?', reason: 'A fabricated body citation must be rejected.', evidenceQuote: secretBody }] }) } }] });
   };
   try {
-    await learnInbox(f.service, f.id, true, 'openrouter');
+    await learnInbox(f.service, f.id, true, 'nebius');
     const reads = paths.filter(path => path.startsWith('messages/')); assert.equal(reads.length, 4);
     for (const path of reads) { const params = new URLSearchParams(path.split('?')[1]); assert.equal(params.get('format'), 'metadata'); assert.deepEqual(params.getAll('metadataHeaders').sort(), ['Date','From','List-ID','Subject']); }
     assert.equal(f.store.get('SELECT count(*) AS n FROM agent_questions').n, 0);
@@ -304,7 +304,7 @@ test('discovery supplies from address, sent/received dates, trustworthy age and 
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ questions: [{ messageId: email.id, category: 'bank_transactions', minAgeDays: 90, question: 'How should I handle old bank confirmations?', reason: 'Routine bank notices are several months old.', evidenceQuote: email.subject }] }) } }] });
   };
   try {
-    await learnInbox(f.service, f.id, true, 'openrouter');
+    await learnInbox(f.service, f.id, true, 'nebius');
     const question = f.crypto.open(f.store.get('SELECT payload FROM agent_questions').payload);
     assert.match(question.question, /older than 90 days/); assert.equal(question.minAgeDays, 90);
   } finally { globalThis.fetch = originalFetch; }
@@ -332,7 +332,7 @@ test('discovery excludes other tabs even when a legacy saved sample contains the
     calls++; assert.ok(!options.body.includes('EXCLUDED_TAB_CANARY'));
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{"questions":[]}' } }] });
   };
-  try { const result = await learnInbox(f.service, f.id, true, 'openrouter'); assert.equal(result.inspected, 1); assert.equal(calls, 1); }
+  try { const result = await learnInbox(f.service, f.id, true, 'nebius'); assert.equal(result.inspected, 1); assert.equal(calls, 1); }
   finally { globalThis.fetch = originalFetch; }
 });
 
@@ -366,8 +366,34 @@ test('paid discovery and cleanup searches are also restricted to Primary', async
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{"questions":[]}' } }] });
   try {
-    await learnInbox(f.service, f.id, true, 'openrouter');
+    await learnInbox(f.service, f.id, true, 'nebius');
     await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', f.infer));
     assert.equal(queries.length, 2); assert.ok(queries.every(query => query.includes('category:primary') && query.includes('is:unread')));
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('hackathon mode unlocks repeated 100-email runs and daily access without resetting commercial quota', async t => {
+  const f = fixture(t, { keepPeople: false });
+  await accessFor(f.service, f.id); f.store.run('UPDATE account_access SET free_used=100,discovery_used=1');
+  f.service.config.hackathonMode = true;
+  assert.equal((await accessFor(f.service, f.id)).dailyAllowed, true);
+  const run = () => f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', async () => ({ action: 'read', confidence: 1, reason: 'Low priority.' })));
+  assert.ok((await run()).changed > 0);
+  const fresh = structuredClone(f.mails.get('noise')); fresh.id = 'brand-new'; fresh.labelIds = ['INBOX', 'UNREAD']; fresh.payload.headers[0].value = 'new@example.invalid'; f.mails.clear(); f.mails.set(fresh.id, fresh);
+  assert.equal((await run()).changed, 1);
+  assert.equal(f.store.get('SELECT free_used FROM account_access').free_used, 100);
+  assert.equal((await accessFor(f.service, f.id)).remaining, 100);
+  await f.service.saveRules(f.id, { ...f.rules, daily: true });
+});
+
+test('hackathon daily agent runs with saved consent once per account-local day', async t => {
+  const f = fixture(t, { keepPeople: false }); f.service.config.hackathonMode = true;
+  await f.service.saveRules(f.id, { ...f.rules, daily: true, hour: 0, timezone: 'UTC' });
+  const originalFetch = globalThis.fetch; let calls = 0;
+  globalThis.fetch = async (_url, options) => {
+    calls++; const items = JSON.parse(JSON.parse(options.body).messages[1].content);
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ decisions: items.map(item => ({ id: item.id, decision: { action: 'read', confidence: 1, reason: 'Routine low-priority mail.' } })) }) } }] });
+  };
+  try { await f.service.daily(); const firstCalls = calls; assert.ok(f.writes.length > 0); assert.ok(firstCalls > 0); await f.service.daily(); assert.equal(calls, firstCalls); assert.equal(f.store.get("SELECT count(*) AS total FROM runs WHERE kind='daily'").total, 1); assert.equal(f.store.get('SELECT last_error FROM accounts').last_error, null); }
+  finally { globalThis.fetch = originalFetch; }
 });

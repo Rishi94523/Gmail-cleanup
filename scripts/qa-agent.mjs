@@ -90,7 +90,7 @@ try {
   await page.getByRole('button', { name: 'Overview', exact: true }).click();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Mobile dashboard overflow');
   await page.screenshot({ path: resolve(output, 'agent-mobile.png'), fullPage: true });
-  state.aiProvider = 'openrouter'; await page.reload();
+  state.rules.agent.consentProvider = ''; await page.reload();
   await page.getByRole('button', { name: 'Preferences', exact: true }).first().click();
   await page.waitForFunction(() => document.querySelector('#agent-consent-description').textContent.includes('our AI service'));
   assert.equal(await page.locator('#agent-consent').isChecked(), false);
