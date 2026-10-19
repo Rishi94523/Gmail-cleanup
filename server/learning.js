@@ -4,8 +4,26 @@ import { PREFERENCE_CATEGORIES, categoryScope, discoveryModelKey } from './prefe
 import { chatJSON } from './ai.js';
 import { clockContext } from './email-context.js';
 
+export const QUESTION_EXPLANATION_GUIDANCE = '\nWrite every question reason for the person using the app: one or two short, natural sentences describing the actual inbox pattern and why their choice matters. For example: "You receive activity alerts, including mention notifications from Academia.edu. Your answer will help me handle similar alerts." This is a style example only; use only senders and patterns actually present. Never expose category keys, missing preferences, confidence scores, schemas, or other implementation details. Do not call social-platform notifications cold outreach merely because they are unwanted; cold outreach means direct unsolicited pitches or business approaches. Keep the question broad across senders.';
+
+export function questionExplanation(reason, scope, sample) {
+  // Older stored questions may contain model diagnostics. Keep their actual
+  // subject as evidence rather than paying for another inference to rewrite it.
+  if (/\b[a-z]+(?:_[a-z]+)+\b|category preference|no .*preference.*exist|missing preference|categoryConfidence|scope_hash/i.test(reason || '')) {
+    return `Your inbox includes ${scope.label.toLowerCase()}${sample.subject && sample.subject !== '(No subject)' ? `, such as “${sample.subject.slice(0, 160)}”` : ''}. Your answer will guide how similar emails are handled.`;
+  }
+  return reason;
+}
+async function initialSamplePending(service, id, store = service.store) {
+  const row = await store.get('SELECT payload FROM trial_samples WHERE account_id=?', id);
+  const sample = row && service.crypto.open(row.payload);
+  if (sample?.repair?.active) return sample.repair.claimed.length === 0;
+  const access = await store.get('SELECT free_used FROM account_access WHERE account_key=?', createHash('sha256').update(id).digest('hex'));
+  return !access?.free_used;
+}
+
 export const ASK_PREFERENCE_TOOL = {
-  type: 'function', function: { name: 'ask_preference', description: 'Ask one broad category preference that applies across products and senders. Never ask whether the user wants a specific brand or mailing list. Reuse existing category preferences; sender exceptions are managed separately by the user. The email stays unchanged. Use a broad reusable topic; examples include job alerts or newsletters, but invent a topic_ slug when the actual email needs a different topic. The server supplies permitted choices. Never wait for an answer.', parameters: { type: 'object', additionalProperties: false, properties: { category: { type: 'string', pattern: '^(?:' + Object.keys(PREFERENCE_CATEGORIES).join('|') + '|topic_[a-z][a-z0-9_]{2,48})$' }, question: { type: 'string', maxLength: 240 }, reason: { type: 'string', maxLength: 400 }, minAgeDays: { type: 'integer', minimum: 0, maximum: 3650 } }, required: ['category', 'question', 'reason'] } }
+  type: 'function', function: { name: 'ask_preference', description: 'Ask one broad category preference that applies across products and senders. Never ask whether the user wants a specific brand or mailing list. Reuse existing category preferences; sender exceptions are managed separately by the user. The email stays unchanged. Explain the observed inbox pattern in plain, natural language for the user; never mention internal category keys or missing preferences. Use a broad reusable topic; examples include job alerts or newsletters, but invent a topic_ slug when the actual email needs a different topic. The server supplies permitted choices. Never wait for an answer.', parameters: { type: 'object', additionalProperties: false, properties: { category: { type: 'string', pattern: '^(?:' + Object.keys(PREFERENCE_CATEGORIES).join('|') + '|topic_[a-z][a-z0-9_]{2,48})$' }, question: { type: 'string', maxLength: 240 }, reason: { type: 'string', maxLength: 400 }, minAgeDays: { type: 'integer', minimum: 0, maximum: 3650 } }, required: ['category', 'question', 'reason'] } }
 };
 export function scopeFor(message) {
   const h = headersOf(message); const sender = senderAddress(h.from);
@@ -13,7 +31,7 @@ export function scopeFor(message) {
   return { sender, listId, scopeHash: createHash('sha256').update(JSON.stringify({ sender, listId })).digest('hex') };
 }
 export function choicesFor(p, scope) {
-  const labels = { read: 'Mark future low-priority mail as read', archive: 'Archive future low-priority mail', both: 'Mark read and archive future low-priority mail' };
+  const labels = { read: 'Mark as read', archive: 'Archive', both: 'Mark as read and archive' };
   return [{ id: 'keep', label: scope.kind === 'category' ? 'Keep these in my inbox' : 'Always keep this sender or list' }, ...(p.topicActions && scope.kind === 'category' ? Object.entries(labels).map(([id, label]) => ({ id, label })) : [{ id: p.action, label: labels[p.action] }]), ...(p.autoUnsubscribe && scope.listId ? [{ id: 'unsubscribe', label: 'Unsubscribe from future unwanted marketing on this list' }] : []), { id: 'later', label: 'Ask me tomorrow; leave emails alone' }];
 }
 export async function memoryFor(service, id, scope) {
@@ -49,7 +67,8 @@ export async function askPreference(service, id, message, p, args, { initial = f
     // The model chooses topics and evidence; category wording keeps questions
     // broad instead of letting a cited sender turn into a brand-specific rule.
     const wording = authored || minAgeDays ? `How should I handle ${scope.label.toLowerCase()}${minAgeDays ? ` older than ${minAgeDays} days` : ''}?` : fallback;
-    const payload = service.crypto.seal({ question: wording, reason: args.reason, scope, initial, minAgeDays, options: choicesFor(p, scope).map(o => initial ? { ...o, label: o.label.replace('future low-priority mail', 'low-priority emails in this first cleanup') } : o), sample: { subject: headersOf(message).subject || '(No subject)' } });
+    const sample = { subject: headersOf(message).subject || '(No subject)' };
+    const payload = service.crypto.seal({ question: wording, reason: questionExplanation(args.reason, scope, sample), scope, initial, minAgeDays, options: choicesFor(p, scope), sample });
     if (old) await tx.run("UPDATE agent_questions SET payload=?,status='pending',version=version+1,updated=?,deferred_at=?,snoozed_until=0 WHERE id=? AND account_id=?", payload, now, now + 30000, questionId, id);
     else await tx.run("INSERT INTO agent_questions(id,account_id,scope_hash,payload,status,created,updated,deferred_at) VALUES(?,?,?,?,'pending',?,?,?)", questionId, id, scope.scopeHash, payload, now, now, now + 30000);
     return { id: questionId, status: 'pending' };
@@ -64,7 +83,12 @@ export async function learningTray(service, id) {
     service.store.get('SELECT payload FROM agent_discoveries WHERE account_id=? AND provider=? AND model=?', id, service.config.aiProvider || 'openrouter', discoveryModelKey(service.config.aiModel)),
     service.store.get("SELECT count(*) AS total FROM agent_questions WHERE account_id=? AND status='pending' AND scope_hash LIKE 'category:%' AND snoozed_until<=?", id, Date.now())
   ]);
-  return { questions: questions.map(({ payload, ...row }) => ({ ...row, ...service.crypto.open(payload) })), questionsTotal: pending.total, memories: memories.map(({ payload, ...row }) => ({ ...row, ...service.crypto.open(payload) })), discovery: discovery ? service.crypto.open(discovery.payload) : null };
+  const initialPending = await initialSamplePending(service, id);
+  const actionLabels = { read: 'Mark as read', archive: 'Archive', both: 'Mark as read and archive' };
+  return { questions: questions.map(({ payload, ...row }) => {
+    const question = service.crypto.open(payload);
+    return { ...row, ...question, initial: Boolean(question.initial && initialPending), reason: questionExplanation(question.reason, question.scope, question.sample), options: question.options.map(option => ({ ...option, label: actionLabels[option.id] || option.label })) };
+  }), questionsTotal: pending.total, memories: memories.map(({ payload, ...row }) => ({ ...row, ...service.crypto.open(payload) })), discovery: discovery ? service.crypto.open(discovery.payload) : null };
 }
 async function recordEvent(tx, service, id, data) { await tx.run('INSERT INTO preference_events(id,account_id,payload,created) VALUES(?,?,?,?)', randomUUID(), id, service.crypto.seal(data), Date.now()); }
 export async function interpretPreference(service, id, input) {
@@ -95,7 +119,7 @@ export async function answerPreference(service, id, input) {
     }
     const minAgeDays = preferenceAge(custom ? input.minAgeDays : undefined, question.scope, question.minAgeDays || question.scope.minimumAgeDays || 0);
     const memory = { scope: question.scope, action, minAgeDays, instructions: custom ? input.instructions.trim() : '', sourceQuestion: row.id, explanation: question.question, applies: 'future_messages_only', effectiveFrom: Date.now() };
-    if (question.initial) {
+    if (question.initial && await initialSamplePending(service, id, tx)) {
       const sample = await tx.get('SELECT payload FROM trial_samples WHERE account_id=?', id);
       if (sample) { memory.initialSampleIds = service.crypto.open(sample.payload).ids; memory.applies = 'initial_sample_and_future_messages'; }
     }

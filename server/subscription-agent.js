@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { headersOf, senderAddress } from './rules.js';
 import { unsubscribeUrl, postUnsubscribe } from './security.js';
 import { scopeFor } from './learning.js';
+import { outsidePrimary } from './inbox-scope.js';
 
 export function transactional(message) {
   const h = headersOf(message); const parts = [];
@@ -39,7 +40,7 @@ export async function automaticUnsubscribe(service, id, message, guard, expected
   const scope = scopeFor(message); const account = await service.account(id);
   if (!account.rules.agent?.autoUnsubscribe || JSON.stringify(account.rules) !== JSON.stringify(expectedRules) || transactional(message)) throw new Error('Unsubscribe permission or email context changed.');
   const gmail = service.client(account); const fresh = await gmail(`messages/${encodeURIComponent(message.id)}?format=metadata`);
-  if (fresh.historyId !== message.historyId || scopeFor(fresh).scopeHash !== scope.scopeHash || transactional(fresh)) throw new Error('Subscription changed; no unsubscribe request was sent.');
+  if (!fresh.labelIds?.includes('INBOX') || outsidePrimary(fresh) || fresh.historyId !== message.historyId || scopeFor(fresh).scopeHash !== scope.scopeHash || transactional(fresh)) throw new Error('Subscription changed; no unsubscribe request was sent.');
   const url = unsubscribeUrl(headersOf(fresh)); if (!url || !scope.listId) throw new Error('Supported one-click unsubscribe is not available.');
   const latest = await service.account(id);
   if (JSON.stringify(latest.rules) !== JSON.stringify(expectedRules)) throw new Error('Preferences changed; no unsubscribe request was sent.');

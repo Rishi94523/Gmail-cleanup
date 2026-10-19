@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { PRIMARY_INBOX_QUERY } from './inbox-scope.js';
 
 export const FREE_EMAIL_LIMIT = 100;
 const key = value => createHash('sha256').update(value).digest('hex');
@@ -41,9 +42,9 @@ export async function requirePaid(service, id) {
 export async function trialSample(service, id, gmail) {
   const previous = await service.store.get('SELECT payload FROM trial_samples WHERE account_id=?', id);
   if (previous) return service.crypto.open(previous.payload);
-  const page = await gmail(`messages?${new URLSearchParams({ q: 'in:inbox is:unread', maxResults: String(FREE_EMAIL_LIMIT) })}`);
+  const page = await gmail(`messages?${new URLSearchParams({ q: PRIMARY_INBOX_QUERY, maxResults: String(FREE_EMAIL_LIMIT) })}`);
   const ids = [...new Set((page.messages || []).map(m => m.id))].slice(0, FREE_EMAIL_LIMIT);
-  const sample = { ids, moreAvailable: Boolean(page.nextPageToken), created: Date.now() };
+  const sample = { ids, scope: 'primary', moreAvailable: Boolean(page.nextPageToken), created: Date.now() };
   await service.store.run('INSERT INTO trial_samples(account_id,payload) VALUES(?,?) ON CONFLICT DO NOTHING', id, service.crypto.seal(sample));
   return sample;
 }

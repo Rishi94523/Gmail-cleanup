@@ -5,6 +5,7 @@ export async function jsonFetch(url, options = {}) {
   const response = await fetch(url, { ...options, signal: AbortSignal.timeout(20000) });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
+    console.warn(JSON.stringify({ event: 'gmail_request_failed', status: response.status, throttled: response.status === 429 || (result.error?.errors || []).some(error => ['rateLimitExceeded', 'userRateLimitExceeded'].includes(error.reason)) }));
     const error = new Error(response.status === 401 || result.error === 'invalid_grant' ? 'Gmail connection expired. Please reconnect.' : `Provider request failed (${response.status}). Try again later.`);
     error.status = response.status; throw error;
   }

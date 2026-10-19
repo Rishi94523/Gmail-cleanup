@@ -44,7 +44,7 @@ export class InboxService {
       for (const question of await tx.all("SELECT id,payload FROM agent_questions WHERE account_id=? AND status='pending'", id)) {
         const payload = this.crypto.open(question.payload);
         if (!payload.initial) continue;
-        const options = choicesFor(preferences(rules.agent), payload.scope).map(o => ({ ...o, label: o.label.replace('future low-priority mail', 'low-priority emails in this first cleanup') }));
+        const options = choicesFor(preferences(rules.agent), payload.scope);
         if (JSON.stringify(payload.options) !== JSON.stringify(options)) await tx.run('UPDATE agent_questions SET payload=?,version=version+1,updated=? WHERE id=? AND account_id=?', this.crypto.seal({ ...payload, options }), Date.now(), question.id, id);
       }
     });

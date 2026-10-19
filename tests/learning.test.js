@@ -198,3 +198,32 @@ test('supported automatic request is recorded once; uncertain network outcomes n
   const retried = await automaticUnsubscribe(f.service, f.id, message, async () => {}, f.rules, async () => { requests++; }); assert.equal(retried.requested, false); assert.equal(requests, 2);
   assert.equal(f.store.get('SELECT status FROM subscription_actions').status, 'uncertain');
 });
+
+test('stored initial question labels and explanations stay natural after cleanup; answers apply to future mail', async t => {
+  const f = fixture(t);
+  f.store.run('INSERT INTO trial_samples(account_id,payload) VALUES(?,?)', f.id, f.crypto.seal({ ids: ['one', 'two'] }));
+  const created = await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, { ...args, reason: 'No category preference exists for product_announcements.' }, { initial: true });
+  const stored = f.store.get('SELECT payload FROM agent_questions WHERE id=?', created.id); const legacy = f.crypto.open(stored.payload);
+  legacy.options.find(option => option.id === 'read').label = 'Mark low-priority emails in this first cleanup as read';
+  legacy.reason = 'No category preference exists for product_announcements.';
+  f.store.run('UPDATE agent_questions SET payload=? WHERE id=?', f.crypto.seal(legacy), created.id);
+  await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', async () => ({ action: 'keep', confidence: 1, reason: 'Keep for now.' })));
+  const q = (await learningTray(f.service, f.id)).questions[0];
+  assert.equal(q.initial, false); assert.ok(q.options.every(option => !option.label.includes('first cleanup')));
+  assert.match(q.reason, /Your inbox includes/); assert.doesNotMatch(q.reason, /product_announcements|category preference/);
+  const result = await answerPreference(f.service, f.id, { questionId: q.id, version: q.version, option: 'read' });
+  assert.equal(result.applies, 'future_messages_only');
+  assert.equal((await learningTray(f.service, f.id)).memories[0].initialSampleIds, undefined);
+});
+
+test('automatic unsubscribe refuses mail that moved out of Primary before the request', async t => {
+  const f = fixture(t); const originalClient = f.service.client.bind(f.service);
+  f.service.client = account => { const gmail = originalClient(account); return async (path, ...args) => {
+    const message = await gmail(path, ...args);
+    if (path === 'messages/one?format=metadata') message.labelIds.push('CATEGORY_PROMOTIONS');
+    return message;
+  }; };
+  let posts = 0;
+  await assert.rejects(automaticUnsubscribe(f.service, f.id, f.messages.get('one'), async () => {}, f.rules, async () => { posts++; }), /Subscription changed/);
+  assert.equal(posts, 0); assert.equal(f.store.get('SELECT count(*) AS total FROM subscription_actions').total, 0);
+});

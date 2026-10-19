@@ -5,7 +5,7 @@ const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&a
 export function createOnboarding({ getState, request, refresh, startAgent, showPage }) {
   const root = document.createElement('section');
   root.id = 'onboarding'; root.hidden = true; root.setAttribute('aria-label', 'Set up your inbox agent');
-  root.innerHTML = `<header class="ob-header"><a class="wordmark" href="/">inboxclean<span class="brand-dot">.</span></a><span class="ob-connected"><i></i> Gmail connected</span></header><main class="ob-main"><div class="ob-panel" id="ob-panel"></div></main><footer class="ob-footer">Your first 100 emails. Your say in what stays.</footer>`;
+  root.innerHTML = `<header class="ob-header"><a class="wordmark" href="/">inboxclean<span class="brand-dot">.</span></a><span class="ob-connected"><i></i> Gmail connected</span></header><main class="ob-main"><div class="ob-panel" id="ob-panel"></div></main><footer class="ob-footer">Your first 100 unread emails in Primary.</footer>`;
   document.body.append(root);
   const panel = root.querySelector('#ob-panel');
   let active = false; let working = false; let discovery; let question; let answered = 0; let total = 0; let reviewPage = 0; let complete;
@@ -20,7 +20,7 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
   function close(page = 'overview') { active = false; root.hidden = true; document.body.classList.remove('onboarding-open'); showPage(page); }
   function intro() {
     const repair = getState().access?.recoveryAvailable;
-    render(`<p class="ob-kicker">${repair ? 'YOUR EARLIER RUN MADE NO CHANGES' : 'CONNECTED. NOW, LET’S GET ACQUAINTED.'}</p><h1>${repair ? 'Let’s take another look.' : 'A little thinking.<br>A lighter inbox.'}</h1><p class="ob-copy">${repair ? 'Review the original sample with the updated agent, including emails previously left waiting. Your saved preferences stay.' : 'Your agent will look at the subjects, senders and dates of up to 100 unread emails, then ask what matters to you.'}</p><label class="ob-consent"><input id="ob-consent" type="checkbox"><span>${repair ? 'Reassess my original sample with AI' : 'Allow AI to analyze my email'}</span></label><p class="ob-detail">Our AI service analyzes subjects, sender details and dates to suggest preferences. Email text is shared only during cleanup. No attachments. Nothing changes until you approve your preferences and start cleanup.</p><button class="primary ob-primary" id="ob-discover" disabled>${repair ? 'Review my questions again' : 'Let my agent look'} →</button>`);
+    render(`<p class="ob-kicker">${repair ? 'YOUR EARLIER RUN MADE NO CHANGES' : 'CONNECTED. NOW, LET’S GET ACQUAINTED.'}</p><h1>${repair ? 'Let’s take another look.' : 'A little thinking.<br>A lighter inbox.'}</h1><p class="ob-copy">${repair ? 'Review the original sample with the updated agent, including emails previously left waiting. Your saved preferences stay.' : 'Your agent will look at the subjects, senders and dates of up to 100 unread emails in Primary, then ask what matters to you.'}</p><label class="ob-consent"><input id="ob-consent" type="checkbox"><span>${repair ? 'Reassess my original sample with AI' : 'Allow AI to analyze my email'}</span></label><p class="ob-detail">Our AI service analyzes subjects, sender details and dates to suggest preferences. Email text is shared only during cleanup. No attachments. Nothing changes until you approve your preferences and start cleanup.</p><button class="primary ob-primary" id="ob-discover" disabled>${repair ? 'Review my questions again' : 'Let my agent look'} →</button>`);
     const consent = panel.querySelector('input'); const button = panel.querySelector('button');
     consent.onchange = () => { button.disabled = !consent.checked || !getState().aiConfigured; };
     button.onclick = async () => {
@@ -89,6 +89,7 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
       await request('/api/rules', { ...state.rules, agent, daily: false, aiEnabled: false });
       await refresh();
       await startAgent(event => {
+        if (event.type === 'stage') panel.querySelector('.ob-thinking-line').textContent = event.message;
         if (event.type === 'decision') {
           const copy = panel.querySelector('.ob-copy'); copy.textContent = `${event.inspected} checked · ${event.changed} tidied · ${event.kept - (event.waiting || 0)} kept${event.waiting ? ` · ${event.waiting} need review` : ''}`;
           panel.querySelector('.ob-thinking-line').textContent = event.reason || 'Considering what matters.';

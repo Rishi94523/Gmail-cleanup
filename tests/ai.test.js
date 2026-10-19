@@ -54,3 +54,12 @@ test('missing selected key does not send requests; malformed and truncated outpu
     await assert.rejects(chatJSON(config, [], async () => Response.json({ choices: [choice] })), error => choice.finish_reason === 'length' ? error.publicCode === 'AI_TRUNCATED' : error.publicCode === 'AI_INVALID_OUTPUT');
   }
 });
+
+test('AI telemetry records durations and reported cache hits without prompts or model output', async () => {
+  const records = []; const originalInfo = console.info; console.info = line => records.push(JSON.parse(line));
+  try {
+    await chatJSON(aiConfig({ AI_PROVIDER: 'nebius', NEBIUS_API_KEY: 'private-fixture-key' }), [{ role: 'user', content: 'PRIVATE_PROMPT_CANARY' }], async () => Response.json({ usage: { prompt_tokens: 1200, completion_tokens: 70, prompt_tokens_details: { cached_tokens: 1024 }, completion_tokens_details: { reasoning_tokens: 60 } }, choices: [{ finish_reason: 'stop', message: { content: '{"private_response_canary":true}' } }] }));
+    assert.equal(records.length, 1); assert.equal(records[0].cachedPromptTokens, 1024); assert.equal(records[0].reasoningTokens, 60);
+    assert.ok(records[0].elapsedMs >= 0); assert.doesNotMatch(JSON.stringify(records), /PRIVATE_PROMPT_CANARY|private_response_canary|private-fixture-key/);
+  } finally { console.info = originalInfo; }
+});

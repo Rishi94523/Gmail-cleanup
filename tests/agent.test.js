@@ -9,7 +9,7 @@ import { encryption } from '../server/security.js';
 import { InboxService } from '../server/service.js';
 import { DEFAULT_RULES } from '../server/rules.js';
 import { DEFAULT_PREFERENCES, preferences, decisionFor, emailText, runAgent, learnInbox, modelDecisionBatch } from '../server/agent.js';
-import { accessFor, restartTrial, reserveFreeEmail } from '../server/access.js';
+import { accessFor, restartTrial, reserveFreeEmail, trialSample } from '../server/access.js';
 
 function fixture(t, patch = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'inboxclean-agent-')); const store = openStore(dir); const crypto = encryption(randomBytes(32).toString('base64'));
@@ -307,5 +307,67 @@ test('discovery supplies from address, sent/received dates, trustworthy age and 
     await learnInbox(f.service, f.id, true, 'openrouter');
     const question = f.crypto.open(f.store.get('SELECT payload FROM agent_questions').payload);
     assert.match(question.question, /older than 90 days/); assert.equal(question.minAgeDays, 90);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('free sample requests the newest 100 unread Primary messages and stays frozen', async t => {
+  const f = fixture(t); let calls = 0;
+  const gmail = async path => {
+    calls++; const q = new URLSearchParams(path.split('?')[1]);
+    assert.equal(q.get('q'), 'in:inbox category:primary is:unread'); assert.equal(q.get('maxResults'), '100');
+    return { messages: Array.from({ length: 105 }, (_, i) => ({ id: `newest-${i}` })), nextPageToken: 'older' };
+  };
+  const sample = await trialSample(f.service, f.id, gmail);
+  assert.equal(sample.scope, 'primary'); assert.equal(sample.ids.length, 100);
+  assert.equal(sample.ids[0], 'newest-0'); assert.equal(sample.ids[99], 'newest-99');
+  assert.deepEqual(await trialSample(f.service, f.id, gmail), sample); assert.equal(calls, 1);
+});
+
+test('discovery excludes other tabs even when a legacy saved sample contains them', async t => {
+  const f = fixture(t); f.mails.clear();
+  const msg = tab => ({ id: tab, internalDate: String(Date.now()), labelIds: ['INBOX', 'UNREAD', tab], payload: { headers: [{ name: 'From', value: 'news@example.invalid' }, { name: 'Subject', value: tab === 'CATEGORY_PERSONAL' ? 'Primary subject' : 'EXCLUDED_TAB_CANARY' }] } });
+  for (const tab of ['CATEGORY_PERSONAL', 'CATEGORY_PROMOTIONS', 'CATEGORY_SOCIAL', 'CATEGORY_UPDATES', 'CATEGORY_FORUMS']) f.mails.set(tab, msg(tab));
+  const originalFetch = globalThis.fetch; let calls = 0;
+  globalThis.fetch = async (_url, options) => {
+    calls++; assert.ok(!options.body.includes('EXCLUDED_TAB_CANARY'));
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{"questions":[]}' } }] });
+  };
+  try { const result = await learnInbox(f.service, f.id, true, 'openrouter'); assert.equal(result.inspected, 1); assert.equal(calls, 1); }
+  finally { globalThis.fetch = originalFetch; }
+});
+
+test('other Gmail tabs never reach AI classification or mailbox changes', async t => {
+  const f = fixture(t, { keepPeople: false }); f.mails.get('noise').labelIds.push('CATEGORY_PERSONAL');
+  for (const [id, tab] of [['person', 'CATEGORY_PROMOTIONS'], ['uncertain', 'CATEGORY_UPDATES'], ['starred', 'CATEGORY_SOCIAL']]) f.mails.get(id).labelIds.push(tab);
+  const classified = [];
+  const result = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', async (_config, _prompt, input) => { classified.push(input.sender); return { action: 'read', confidence: 1, reason: 'Approved low-priority mail.' }; }));
+  assert.equal(result.changed, 1); assert.deepEqual(classified, ['noise@example.invalid']); assert.equal(f.writes.length, 1);
+  for (const id of ['person', 'uncertain', 'starred']) assert.ok(f.mails.get(id).labelIds.includes('UNREAD'));
+});
+
+test('a message that moves out of Primary after classification is left unchanged', async t => {
+  const f = fixture(t, { keepPeople: false }); const originalClient = f.service.client.bind(f.service);
+  f.service.client = account => { const gmail = originalClient(account); return async (path, ...args) => {
+    const message = await gmail(path, ...args);
+    if (path === 'messages/noise?format=metadata') message.labelIds.push('CATEGORY_PROMOTIONS');
+    return message;
+  }; };
+  await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', async (_config, _prompt, input) => ({ action: input.sender.startsWith('noise@') ? 'read' : 'keep', confidence: 1, reason: 'Approved topic.' })));
+  assert.equal(f.writes.length, 0); assert.ok(f.mails.get('noise').labelIds.includes('UNREAD'));
+});
+
+test('paid discovery and cleanup searches are also restricted to Primary', async t => {
+  const f = fixture(t); await accessFor(f.service, f.id); f.store.run("UPDATE account_access SET tier='paid'");
+  const originalClient = f.service.client.bind(f.service); const queries = [];
+  f.service.client = account => { const gmail = originalClient(account); return async (path, ...args) => {
+    if (path.startsWith('messages?')) { const query = new URLSearchParams(path.split('?')[1]).get('q'); if (!query.includes('in:sent')) queries.push(query); }
+    return gmail(path, ...args);
+  }; };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{"questions":[]}' } }] });
+  try {
+    await learnInbox(f.service, f.id, true, 'openrouter');
+    await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', f.infer));
+    assert.equal(queries.length, 2); assert.ok(queries.every(query => query.includes('category:primary') && query.includes('is:unread')));
   } finally { globalThis.fetch = originalFetch; }
 });
