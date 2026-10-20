@@ -40,11 +40,12 @@ export async function memoryFor(service, id, scope) {
   return row ? { id: row.id, version: row.version, ...service.crypto.open(row.payload) } : null;
 }
 export async function categoryContext(service, id) {
-  const [memories, questions] = await Promise.all([
+  const [memories, questions, notes] = await Promise.all([
     service.store.all("SELECT id,payload,version FROM preference_memories WHERE account_id=? AND scope_hash LIKE 'category:%'", id),
-    service.store.all("SELECT id,scope_hash FROM agent_questions WHERE account_id=? AND status='pending' AND scope_hash LIKE 'category:%'", id)
+    service.store.all("SELECT id,scope_hash FROM agent_questions WHERE account_id=? AND status='pending' AND scope_hash LIKE 'category:%'", id),
+    service.store.all("SELECT payload FROM preference_memories WHERE account_id=? AND scope_hash LIKE 'note:%' ORDER BY updated", id)
   ]);
-  return { memories: memories.map(r => ({ id: r.id, version: r.version, ...service.crypto.open(r.payload) })), questions };
+  return { memories: memories.map(r => ({ id: r.id, version: r.version, ...service.crypto.open(r.payload) })), questions, notes: notes.map(r => service.crypto.open(r.payload).instructions) };
 }
 export async function holdEmail(service, id, messageId, scope, questionId = null) {
   await service.store.run('INSERT INTO agent_holds(account_id,message_id,scope_hash,question_id,created) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING', id, messageId, scope.scopeHash, questionId, Date.now());
@@ -140,11 +141,68 @@ export async function editMemory(service, id, input) {
       await recordEvent(tx, service, id, { kind: 'remove', memoryId: row.id, memory }); return { status: 'removed' };
     }
     if (!['keep', 'read', 'archive', 'both', 'unsubscribe'].includes(input.action) || (input.action === 'unsubscribe' && !memory.scope.listId)) throw new Error('Choose a supported preference.');
+    if (memory.scope.kind === 'context' && input.action !== 'keep') throw new Error('Notes provide context only. Add a topic preference to authorize a cleanup action.');
     if (input.instructions !== undefined && (typeof input.instructions !== 'string' || input.instructions.length > 2000)) throw new Error('Keep written preferences under 2000 characters.');
     const minAgeDays = preferenceAge(input.minAgeDays, memory.scope, memory.minAgeDays || memory.scope.minimumAgeDays || 0);
     const previous = memory.action; memory.action = input.action; memory.minAgeDays = minAgeDays; if (input.instructions !== undefined) memory.instructions = input.instructions.trim(); memory.effectiveFrom = Date.now();
     await tx.run('UPDATE preference_memories SET payload=?,version=version+1,updated=? WHERE id=? AND account_id=?', service.crypto.seal(memory), Date.now(), row.id, id);
     await recordEvent(tx, service, id, { kind: 'edit', memoryId: row.id, previous, memory });
     return { status: 'saved', applies: 'future_messages_only' };
+  }));
+}
+
+// Keep the preview bound to this account and preference versions. The browser
+// confirms a sealed proposal, never supplies executable actions of its own.
+async function preferenceSnapshot(service, id, store = service.store) {
+  const rows = await store.all('SELECT id,version,payload FROM preference_memories WHERE account_id=? ORDER BY id', id);
+  return { fingerprint: createHash('sha256').update(JSON.stringify(rows.map(r => [r.id, r.version]))).digest('hex'), memories: rows.map(r => ({ id: r.id, version: r.version, ...service.crypto.open(r.payload) })) };
+}
+
+export async function interpretNotes(service, id, input) {
+  const account = await service.account(id);
+  if (!account.rules.agent?.consent || account.rules.agent.consentProvider !== (service.config.aiProvider || 'nebius')) throw new Error('Allow AI processing before adding written preferences.');
+  if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 2000) throw new Error('Write a preference of 1 to 2000 characters.');
+  const text = input.text.trim(); const snapshot = await preferenceSnapshot(service, id);
+  const result = await chatJSON(service.config, [{ role: 'system', content: 'Turn user-written inbox instructions into a preview for explicit confirmation. No email changes occur here. Return JSON {"supported":true,"topics":[{"category":"existing key or topic_new_broad_topic","action":"keep|read|archive|both","minAgeDays":0}],"context":true}. Set context=true only when the text contains background or interests worth remembering, otherwise false. Original user text is stored verbatim; do not paraphrase it. Use existing category keys for the same meaning. Standard topic examples are supplied, not mandatory. Create at most eight broad topic preferences across senders. Only propose an action the user explicitly requested; preserve every condition and sender exception in their original text, which will accompany each topic. Do not generalize a single-sender request into unconditional permission for a whole topic. Use topic-specific age thresholds, at least 30 days for routine bank transactions or login notices. Never authorize deletion, trash, sending, unsubscribe, disabling protections, or handling unresolved financial/security/medical/legal alerts. If vague, contradictory, unsupported, or requesting a change that needs clarification, return {"supported":false,"clarification":"one natural question"}; do not silently save only the supported portion. Background such as a job search may be saved as context without inventing cleanup permission. Context cannot authorize cleanup. Empty topics are allowed only when context=true.' }, { role: 'user', content: JSON.stringify({ text, clock: clockContext(account.rules.timezone), standardTopics: PREFERENCE_CATEGORIES, existing: snapshot.memories.map(m => ({ scope: m.scope, action: m.action, minAgeDays: m.minAgeDays, instructions: m.instructions })) }) }]);
+  if (result.supported !== true) return { supported: false, clarification: typeof result.clarification === 'string' ? result.clarification.slice(0, 300) : 'What would you like kept, marked read, or archived?' };
+  if (!Array.isArray(result.topics) || result.topics.length > 8) throw new Error('Please describe up to eight topics at a time.');
+  const seen = new Set();
+  const topics = result.topics.map(topic => {
+    const scope = categoryScope(topic?.category);
+    if (!scope || seen.has(scope.category) || !['keep', 'read', 'archive', 'both'].includes(topic.action)) throw new Error('The proposed preference needs clarification. Please try a more specific instruction.');
+    seen.add(scope.category);
+    return { scope, action: topic.action, minAgeDays: preferenceAge(topic.minAgeDays, scope), instructions: text };
+  });
+  const context = result.context === true || (typeof result.context === 'string' && result.context.trim()) ? text : '';
+  if (!topics.length && !context) throw new Error('Describe a preference or something you want your agent to know.');
+  if (context && snapshot.memories.filter(m => m.scope.kind === 'context').length >= 20) throw new Error('Edit or remove an existing note before adding another.');
+  const proposal = { kind: 'preference_notes', accountId: id, fingerprint: snapshot.fingerprint, topics, context, expires: Date.now() + 20 * 60000 };
+  return { supported: true, topics: topics.map(t => ({ ...t, replaces: snapshot.memories.some(m => m.scope.scopeHash === t.scope.scopeHash) })), context, token: service.crypto.seal(proposal) };
+}
+
+export async function saveNotes(service, id, input) {
+  let proposal;
+  try { proposal = service.crypto.open(input.token); } catch { throw new Error('Review your written preference again before saving.'); }
+  if (proposal?.kind !== 'preference_notes' || proposal.accountId !== id || proposal.expires < Date.now()) throw new Error('This preview expired. Review your preference again.');
+  return service.locked(id, async () => service.store.transaction(async tx => {
+    const snapshot = await preferenceSnapshot(service, id, tx);
+    if (snapshot.fingerprint !== proposal.fingerprint) throw new Error('Your preferences changed. Review your instructions again before saving.');
+    const now = Date.now();
+    const sample = await initialSamplePending(service, id, tx) && await tx.get('SELECT payload FROM trial_samples WHERE account_id=?', id);
+    const initialSampleIds = sample ? service.crypto.open(sample.payload).ids : null;
+    for (const topic of proposal.topics) {
+      const memory = { ...topic, explanation: topic.scope.label, applies: initialSampleIds ? 'initial_sample_and_future_messages' : 'future_messages_only', effectiveFrom: now, ...(initialSampleIds ? { initialSampleIds } : {}) };
+      await tx.run('INSERT INTO preference_memories(id,account_id,scope_hash,payload,updated) VALUES(?,?,?,?,?) ON CONFLICT(account_id,scope_hash) DO UPDATE SET payload=excluded.payload,version=preference_memories.version+1,updated=excluded.updated', randomUUID(), id, topic.scope.scopeHash, service.crypto.seal(memory), now);
+      // Resolve the topic question, but do not release or replay held emails.
+      await tx.run("UPDATE agent_questions SET status='answered',version=version+1,updated=? WHERE account_id=? AND scope_hash=? AND status='pending'", now, id, topic.scope.scopeHash);
+      await recordEvent(tx, service, id, { kind: 'written_preference', memory });
+    }
+    if (proposal.context) {
+      const memoryId = randomUUID(); const scopeHash = `note:${memoryId}`;
+      const memory = { scope: { kind: 'context', label: 'A note for your agent', scopeHash }, action: 'keep', minAgeDays: 0, instructions: proposal.context, explanation: 'Context for future decisions; does not authorize cleanup.', effectiveFrom: now, applies: 'future_messages_only' };
+      await tx.run('INSERT INTO preference_memories(id,account_id,scope_hash,payload,updated) VALUES(?,?,?,?,?)', memoryId, id, scopeHash, service.crypto.seal(memory), now);
+      await recordEvent(tx, service, id, { kind: 'written_context', memory });
+    }
+    return { status: 'saved', applies: initialSampleIds ? 'initial_sample_and_future_messages' : 'future_messages_only' };
   }));
 }

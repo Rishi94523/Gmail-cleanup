@@ -1,5 +1,5 @@
 import { customerMessage } from './customer-message.js';
-import { writePreference } from './preference-answer.js';
+import { writePreference, writeNotes } from './preference-answer.js';
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 export function createOnboarding({ getState, request, refresh, startAgent, showPage }) {
@@ -77,7 +77,13 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
     }; });
     if (panel.querySelector('#ob-prev')) panel.querySelector('#ob-prev').onclick = () => { reviewPage--; review().catch(fail); };
     if (panel.querySelector('#ob-next')) panel.querySelector('#ob-next').onclick = () => { reviewPage++; review().catch(fail); };
-    panel.querySelector('#ob-start').onclick = clean;
+    panel.querySelector('#ob-start').textContent = 'One last thing →';
+    panel.querySelector('#ob-start').onclick = finalNotes;
+  }
+  function finalNotes() {
+    render('<p class="ob-kicker">BEFORE WE START</p><h1>Anything else we should know?</h1><p class="ob-copy">Add a preference, an exception, or a little context. You can change these later.</p><div id="ob-notes-composer"></div>');
+    writeNotes(panel.querySelector('#ob-notes-composer'), { request, initial: true,
+      onSaved: async () => { await refresh(); await clean(); }, onSkip: clean });
   }
   async function clean() {
     if (working) return; working = true;

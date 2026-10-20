@@ -1,6 +1,6 @@
 import { customerMessage } from '/customer-message.js';
 import { createOnboarding } from '/onboarding.js';
-import { writePreference } from '/preference-answer.js';
+import { writePreference, writeNotes } from '/preference-answer.js';
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -13,6 +13,7 @@ let busy = false;
 let page = 'overview';
 let toastTimer;
 let approval = null;
+let preferencePage = 0;
 let learningState = { questions: [], memories: [], discovery: null };
 let discoveryStarted = false;
 
@@ -211,7 +212,7 @@ function renderAgentControls() {
   const free = state.access?.tier === 'free';
   $('#agent-start').textContent = free ? (state.access.remaining ? `Clean up to ${state.access.remaining} emails →` : 'Free cleanup used') : 'Start my agent →';
   $('.agent-budget').textContent = free ? `Free cleanup: ${state.access.used} of 100 Primary emails processed. Daily and additional cleanups are for paid plans. Paid plans are not on sale yet.` : `Each run checks up to ${state.access?.limit || 500} unread messages in Primary. Daily cleanup is included. Nothing is deleted.`;
-  $('#save-preferences').textContent = free && state.access.remaining ? 'Save & start free cleanup →' : 'Save preferences →';
+  $('#save-preferences').textContent = 'Save settings →';
   $('#rule-daily').disabled = free || !state.schedulerActive;
   $('#pref-action').closest('.preference-card').hidden = Boolean(p.topicActions);
   $('#pref-daily').disabled = free || !state.schedulerActive;
@@ -241,7 +242,7 @@ $('#preferences-form').addEventListener('submit', event => {
   const consent = $('#agent-consent').checked;
   const agent = { ...state.rules.agent, consent, consentProvider: consent ? (state.aiProvider || 'nebius') : '', enabled: consent && state.aiConfigured, keepJobs: $('#pref-jobs').checked, keepPeople: $('#pref-people').checked, keepNewsletters: $('#pref-newsletters').checked, autoUnsubscribe: $('#pref-auto-unsubscribe').checked, coldMail: $('#pref-cold').value, action: $('#pref-action').value, exceptions: $('#pref-exceptions').value, interests: $('#pref-interests').value };
   const rules = { ...state.rules, agent, aiEnabled: state.rules.aiEnabled && state.rules.aiConsentProvider === (state.aiProvider || 'nebius'), daily: agent.enabled && state.schedulerActive && $('#pref-daily').checked, hour: Number($('#pref-hour').value), timezone: $('#pref-zone').value };
-  operation($('#save-preferences'), 'Saving…', async () => { await request('/api/rules', rules); await refresh(); if (agent.enabled && state.access?.tier === 'free' && state.access.remaining) { if (learningState.questions.length) { showPage('questions'); toast('Answer your setup questions, then start your free cleanup from Overview.'); } else { showPage('overview'); await startAgent(); } } else { showPage('overview'); toast(agent.enabled ? 'Preferences saved. Start your agent when you’re ready.' : 'Preferences saved. Your agent is paused.'); } });
+  operation($('#save-preferences'), 'Saving…', async () => { await request('/api/rules', rules); await refresh(); toast(agent.enabled ? 'Settings saved for future cleanups.' : 'Settings saved. Your agent is paused.'); });
 });
 async function startAgent(onEvent = () => {}) {
   $('#agent-progress').hidden = false; $('#agent-progress .agent-motion').hidden = false; $('#agent-decisions').innerHTML = ''; $('#agent-stage').textContent = 'Connecting to your inbox'; $('#agent-counts').textContent = ''; $('#agent-meter').value = 0;
@@ -301,8 +302,7 @@ function renderLearning() {
   $('#question-count').textContent = number(count); $('#question-notice').hidden = count === 0;
   $('#question-notice-title').textContent = `${number(count)} ${count === 1 ? 'question from your agent' : 'questions from your agent'}`;
   $('#questions-tray').innerHTML = count ? learningState.questions.map(q => `<form class="question-card" data-question="${escape(q.id)}"><p class="eyebrow">${escape(q.scope.label || q.scope.listId || q.scope.sender)}</p><h2>${escape(q.question)}</h2><p>${escape(q.reason)}</p><p class="question-context">Example: ${escape(q.sample.subject)}. Left unchanged.</p>${q.options.map(o => `<label class="question-option"><input type="radio" name="answer" value="${escape(o.id)}" required><span>${escape(o.label)}</span></label>`).join('')}<button class="primary" type="submit">Save my answer →</button><p>${q.initial ? 'Saved for this topic in your Primary sample and future cleanups.' : 'Saved for this topic in future cleanups. Earlier emails left waiting stay unchanged.'}</p></form>`).join('') : empty('You’re all caught up.', 'Questions about uncertain mail will wait here. The agent leaves those emails alone.');
-  const labels = { keep: 'Keep in inbox', read: 'Mark low-priority mail read', archive: 'Archive low-priority mail', both: 'Mark read and archive low-priority mail', unsubscribe: 'Unsubscribe from unwanted marketing on this list' };
-  $('#learned-preferences').innerHTML = learningState.memories.length ? learningState.memories.map(m => `<form class="memory-card" data-memory="${escape(m.id)}"><strong>${escape(m.scope.label || m.scope.listId || m.scope.sender)}</strong><p>${escape(m.explanation)}</p><label>Future handling<select name="action">${Object.entries(labels).filter(([action]) => action !== 'unsubscribe' || m.scope.listId).map(([action, label]) => `<option value="${action}" ${action === m.action ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label>Only after this many days<input name="minAgeDays" type="number" min="${m.scope.minimumAgeDays || 0}" max="3650" value="${m.minAgeDays || m.scope.minimumAgeDays || 0}"></label><label>Written conditions<textarea name="instructions" maxlength="2000" rows="3">${escape(m.instructions || '')}</textarea></label><div class="agent-actions"><button class="secondary" type="submit">Save change</button><button class="text-button" type="button" data-remove-memory="${escape(m.id)}">Forget this preference</button></div><small>Version ${number(m.version)} · still follows your allowed actions and protections.</small></form>`).join('') : '<p>As you answer questions, your preferences appear here.</p>';
+  renderPreferenceList();
   $('#questions-tray').querySelectorAll('[data-question]').forEach(form => {
     const question = learningState.questions.find(question => question.id === form.dataset.question);
     const write = document.createElement('button'); write.type = 'button'; write.className = 'text-button'; write.textContent = 'Or write my own answer'; form.append(write);
@@ -315,6 +315,24 @@ function renderLearning() {
   renderDiscovery(learningState.discovery);
   if (state?.connected) renderExceptions();
 }
+const preferenceLabels = { keep: 'Keep in inbox', read: 'Mark as read', archive: 'Archive', both: 'Read & archive', unsubscribe: 'Unsubscribe' };
+function renderPreferenceList() {
+  const search = $('#preference-search').value.trim().toLowerCase();
+  const filtered = learningState.memories.filter(m => `${m.scope.label || m.scope.sender || ''} ${m.instructions || ''}`.toLowerCase().includes(search));
+  const pages = Math.ceil(filtered.length / 6); preferencePage = Math.min(preferencePage, Math.max(0, pages - 1));
+  $('#preference-total').textContent = `${learningState.memories.length} saved`;
+  $('#learned-preferences').innerHTML = filtered.length ? filtered.slice(preferencePage * 6, preferencePage * 6 + 6).map(m => {
+    const note = m.scope.kind === 'context';
+    return `<details class="preference-row"><summary><span><strong>${escape(note ? m.instructions : m.scope.label || m.scope.listId || m.scope.sender)}</strong><small>${note ? 'Background for your agent' : `${escape(preferenceLabels[m.action])}${m.minAgeDays ? ` · after ${m.minAgeDays} days` : ''}`}</small></span><span class="preference-edit">Edit <span aria-hidden="true">⌄</span></span></summary><form class="memory-card" data-memory="${escape(m.id)}">${note ? '<input type="hidden" name="action" value="keep"><input type="hidden" name="minAgeDays" value="0">' : `<div class="preference-editor-fields"><label>What should happen?<select name="action">${Object.entries(preferenceLabels).filter(([action]) => action !== 'unsubscribe' || m.scope.listId).map(([action, label]) => `<option value="${action}" ${action === m.action ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label>Only after this many days<input name="minAgeDays" type="number" min="${m.scope.minimumAgeDays || 0}" max="3650" value="${m.minAgeDays || m.scope.minimumAgeDays || 0}"></label></div>`}<label>${note ? 'Your note' : 'Conditions or exceptions'}<textarea name="instructions" maxlength="2000" rows="2">${escape(m.instructions || '')}</textarea></label><div class="agent-actions"><button class="secondary" type="submit">Save change</button><button class="text-button" type="button" data-remove-memory="${escape(m.id)}">Remove</button></div><p class="custom-hint">${note ? 'Background helps the agent understand you; it does not grant cleanup permission.' : 'Applies to future cleanups. Protected and uncertain mail stays unchanged.'}</p></form></details>`;
+  }).join('') : `<p class="preference-empty">${search ? 'No matching preferences. Try another search.' : 'Your answers and written preferences will appear here.'}</p>`;
+  $('#preference-pagination').innerHTML = pages > 1 ? `<button type="button" class="text-button" data-preference-page="-1" ${preferencePage === 0 ? 'disabled' : ''}>Previous</button><span>${preferencePage + 1} of ${pages}</span><button type="button" class="text-button" data-preference-page="1" ${preferencePage === pages - 1 ? 'disabled' : ''}>Next</button>` : '';
+}
+$('#preference-search').addEventListener('input', () => { preferencePage = 0; renderPreferenceList(); });
+$('#preference-pagination').addEventListener('click', event => { const button = event.target.closest('[data-preference-page]'); if (button) { preferencePage += Number(button.dataset.preferencePage); renderPreferenceList(); } });
+function mountPreferenceComposer() {
+  writeNotes($('#preference-composer'), { request, onSaved: async () => { await loadLearning(); mountPreferenceComposer(); toast('Preferences saved for future cleanups.'); } });
+}
+mountPreferenceComposer();
 $('#questions-tray').addEventListener('submit', event => {
   event.preventDefault(); const form = event.target.closest('[data-question]'); if (!form) return;
   const question = learningState.questions.find(q => q.id === form.dataset.question); const option = new FormData(form).get('answer');

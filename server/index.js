@@ -11,7 +11,7 @@ import { InboxService } from './service.js';
 import { jsonFetch } from './gmail.js';
 import { learnInbox, runAgent } from './agent.js';
 import { aiConfig } from './ai.js';
-import { learningTray, answerPreference, editMemory, interpretPreference } from './learning.js';
+import { learningTray, answerPreference, editMemory, interpretPreference, interpretNotes, saveNotes } from './learning.js';
 import { accessFor, requirePaid, restartTrial } from './access.js';
 import { PREFERENCE_CATEGORIES } from './preference-categories.js';
 import { schedulerAuthorized } from './scheduler.js';
@@ -119,6 +119,8 @@ export async function createApp(options = {}) {
         const input = await body(req);
         if (url.pathname === '/api/agent/questions/answer') return json(res, 200, await answerPreference(service, id, input));
         if (url.pathname === '/api/agent/questions/interpret') return json(res, 200, await service.locked(id, () => interpretPreference(service, id, input)));
+        if (url.pathname === '/api/agent/preferences/interpret') return json(res, 200, await service.locked(id, () => interpretNotes(service, id, input)));
+        if (url.pathname === '/api/agent/preferences/save') return json(res, 200, await saveNotes(service, id, input));
         if (url.pathname === '/api/agent/memories/edit') return json(res, 200, await editMemory(service, id, input));
         if (url.pathname === '/api/agent/learn') return json(res, 200, await service.locked(id, () => learnInbox(service, id, input.consent, input.provider)));
         if (url.pathname === '/api/agent/reassess-trial') return json(res, 200, await service.locked(id, () => restartTrial(service, id, input.authorize)));

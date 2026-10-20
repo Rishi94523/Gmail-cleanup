@@ -49,6 +49,10 @@ test('session cookies resolve, write routes reject cross-origin or missing CSRF,
   assert.equal((await post({ Origin: 'http://localhost:3000' })).status, 403);
   assert.equal((await post({ Origin: 'http://localhost:3000', 'X-CSRF-Token': data.csrf })).status, 200);
   assert.equal((await call('/api/disconnect', { headers: { Cookie: cookie } })).status, 405);
+  for (const path of ['/api/agent/preferences/interpret', '/api/agent/preferences/save']) {
+    assert.equal((await call(path, { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
+    assert.equal((await call(path, { headers: { Cookie: cookie } })).status, 405);
+  }
 });
 
 test('production routing serves landing and dashboard together and protects free additional-cleanup endpoints', async t => {

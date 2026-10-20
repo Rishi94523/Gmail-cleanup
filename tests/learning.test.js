@@ -9,7 +9,7 @@ import { encryption } from '../server/security.js';
 import { InboxService } from '../server/service.js';
 import { DEFAULT_RULES } from '../server/rules.js';
 import { DEFAULT_PREFERENCES, runAgent } from '../server/agent.js';
-import { askPreference, answerPreference, editMemory, learningTray, scopeFor, interpretPreference } from '../server/learning.js';
+import { askPreference, answerPreference, editMemory, learningTray, scopeFor, interpretPreference, interpretNotes, saveNotes, categoryContext, holdEmail } from '../server/learning.js';
 import { unsubscribeEligible, automaticUnsubscribe } from '../server/subscription-agent.js';
 import { chatJSON } from '../server/ai.js';
 import { categoryScope, matchingException, validateExceptions } from '../server/preference-categories.js';
@@ -34,6 +34,79 @@ function fixture(t) {
   return { id, store, crypto, rules, messages, service: new InboxService(store, crypto, { aiKey: 'fixture-only', aiProvider: 'nebius' }, () => gmail), writes: () => writes };
 }
 const args = { category: 'product_announcements', question: 'Do you want updates from this product?', reason: 'Your subscription intent is unclear.' };
+
+test('written onboarding instructions preview first, save encrypted topic preferences, and authorize only the initial sample', async t => {
+  const f = fixture(t); const originalFetch = globalThis.fetch;
+  f.store.run('INSERT INTO trial_samples(account_id,payload) VALUES(?,?)', f.id, f.crypto.seal({ ids: ['one', 'two'] }));
+  for (const message of f.messages.values()) message.internalDate = String(Date.now() - 120 * 86400000);
+  await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args, { initial: true });
+  globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ supported: true, topics: [{ category: 'product_announcements', action: 'archive', minAgeDays: 30 }], context: '' }) } }] });
+  try {
+    const preview = await interpretNotes(f.service, f.id, { text: 'Archive product announcements after 30 days, but keep Apple announcements.' });
+    assert.equal(preview.topics[0].action, 'archive'); assert.equal(f.store.get('SELECT count(*) AS n FROM preference_memories').n, 0); assert.equal(f.writes(), 0);
+    await saveNotes(f.service, f.id, { token: preview.token });
+    const tray = await learningTray(f.service, f.id); assert.equal(tray.questions.length, 0); assert.equal(tray.memories[0].action, 'archive');
+    assert.deepEqual(tray.memories[0].initialSampleIds, ['one', 'two']); assert.match(tray.memories[0].instructions, /keep Apple/);
+    assert.ok(!f.store.get('SELECT payload FROM preference_memories').payload.includes('Apple'));
+    let calls = 0;
+    const result = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', async (_config, _prompt, input) => {
+      calls++; assert.match(input.categoryPreferences[0].instructions, /keep Apple/);
+      return { action: 'archive', confidence: .99, reason: 'Older product announcement, not Apple', preferenceCategory: 'product_announcements', categoryConfidence: .99 };
+    }));
+    assert.equal(calls, 2); assert.equal(result.changed, 2);
+    await assert.rejects(saveNotes(f.service, f.id, { token: preview.token }), /preferences changed/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('written preference confirmation rejects tampering, another account, expiry, and stale versions without writes', async t => {
+  const f = fixture(t); const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ supported: true, topics: [{ category: 'newsletters', action: 'keep', minAgeDays: 0 }], context: '' }) } }] });
+  try {
+    const preview = await interpretNotes(f.service, f.id, { text: 'Keep my newsletters.' });
+    await assert.rejects(saveNotes(f.service, f.id, { token: 'tampered' }), /Review/);
+    await assert.rejects(saveNotes(f.service, 'someone-else', { token: preview.token }), /expired/);
+    const proposal = f.crypto.open(preview.token); proposal.expires = 1;
+    await assert.rejects(saveNotes(f.service, f.id, { token: f.crypto.seal(proposal) }), /expired/);
+    await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
+    const question = (await learningTray(f.service, f.id)).questions[0];
+    await answerPreference(f.service, f.id, { questionId: question.id, version: question.version, option: 'read' });
+    await assert.rejects(saveNotes(f.service, f.id, { token: preview.token }), /preferences changed/);
+    assert.equal(f.writes(), 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('background notes reach the agent without granting topic permissions; future notes never release held emails', async t => {
+  const f = fixture(t); const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ supported: true, topics: [], context: 'I am looking for software engineering jobs.' }) } }] });
+  try {
+    f.rules.agent.topicActions = true;
+    f.store.run('UPDATE accounts SET rules=? WHERE id=?', JSON.stringify(f.rules), f.id);
+    await holdEmail(f.service, f.id, 'one', scopeFor(f.messages.get('one')));
+    const preview = await interpretNotes(f.service, f.id, { text: 'I am looking for software engineering jobs.' });
+    await saveNotes(f.service, f.id, { token: preview.token });
+    assert.deepEqual((await categoryContext(f.service, f.id)).notes, ['I am looking for software engineering jobs.']);
+    const note = (await learningTray(f.service, f.id)).memories[0];
+    await assert.rejects(editMemory(f.service, f.id, { memoryId: note.id, version: note.version, action: 'archive' }), /context only/);
+    await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', async (_config, _prompt, input) => {
+      assert.deepEqual(input.userContext, ['I am looking for software engineering jobs.']);
+      return { action: 'archive', confidence: 1, reason: 'Do not invent permission', preferenceCategory: 'product_announcements', categoryConfidence: 1 };
+    }));
+    assert.equal(f.writes(), 0);
+    assert.equal(f.store.get('SELECT count(*) AS n FROM agent_holds').n, 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('written instructions reject unsupported actions and unsafe sensitive-notice ages', async t => {
+  const f = fixture(t); const originalFetch = globalThis.fetch;
+  let topic = { category: 'bank_transactions', action: 'read', minAgeDays: 0 };
+  globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ supported: true, topics: [topic], context: '' }) } }] });
+  try {
+    await assert.rejects(interpretNotes(f.service, f.id, { text: 'Mark bank notices read.' }), /30 to 3650/);
+    topic = { category: 'newsletters', action: 'delete', minAgeDays: 0 };
+    await assert.rejects(interpretNotes(f.service, f.id, { text: 'Delete newsletters.' }), /clarification/);
+    assert.equal(f.store.get('SELECT count(*) AS n FROM preference_memories').n, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 test('written answers are interpreted without saving, then explicitly confirmed and remain editable', async t => {
   const f = fixture(t); const created = await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args, { initial: true });

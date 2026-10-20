@@ -6,6 +6,7 @@ The same Node service serves the React landing page, workspace, OAuth callback a
 
 - Discovery freezes the initial Primary sample before cleanup. It sends header metadata in groups of 25, with two model requests at a time. Evidence-backed broad topics are deduplicated before questions are saved.
 - Topic preferences and written conditions are encrypted, versioned and editable. Sender exceptions take precedence. Initial answers can authorize the initial sample; answers after cleanup starts affect future mail only.
+- Written onboarding or workspace instructions are interpreted into a preview and explicitly confirmed. The preview is encrypted, account-bound, expires after 20 minutes and checks preference versions before saving. Background notes preserve the user's words and inform discovery/cleanup without granting action permissions. Saving preferences never runs cleanup or releases held mail.
 - Cleanup fetches 20-message windows, asks for two concurrent batches of ten decisions, then rechecks permissions and labels before serial Gmail writes. A model decision cannot override protected labels or user permissions.
 - Changes are reserved before external writes and confirmed afterward. Uncertain writes are not replayed. Undo restores only labels/read state that the run changed.
 - Uncertain topics use `ask_preference`; the email is held unchanged and the agent continues. Pending questions persist until the user answers or snoozes them.

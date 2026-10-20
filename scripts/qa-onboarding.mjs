@@ -15,6 +15,7 @@ try {
   const q = (id, category, question) => ({ id, scope: { kind: 'category', category, label: category.replaceAll('_', ' ') }, version: 1, initial: true, question, reason: 'A recurring pattern in this inbox sample.', sample: { subject: 'An example email' }, options: [{ id: 'keep', label: 'Keep' }, { id: 'read', label: 'Mark read' }, { id: 'archive', label: 'Archive' }, { id: 'both', label: 'Both' }, { id: 'later', label: 'Later' }] });
   const tray = { questions: [q('unsupported-job', 'job_opportunities', 'Do you want job opportunities in your inbox?'), q('product', 'product_announcements', 'Do you want product announcements in your inbox?'), q('newsletter', 'newsletters', 'Do you want newsletters and blog updates in your inbox?')], memories: [], discovery: null };
   let release; const discoveryGate = new Promise(resolve => { release = resolve; }); let discoveryFails = false; let learned = false; let ran = false; let repairRequested = false;
+  let notesPreview; let notesSaved = false;
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname; let json;
     if (path === '/api/status') json = state;
@@ -28,9 +29,17 @@ try {
       const data = route.request().postDataJSON(); assert.notEqual(data.questionId, 'unsupported-job');
       const item = tray.questions.find(q => q.id === data.questionId); tray.questions = tray.questions.filter(q => q !== item);
       tray.memories.push({ id: item.id, version: 1, scope: item.scope, sourceQuestion: item.id, initialSampleIds: ['sample'], action: data.option === 'custom' ? data.action : data.option, minAgeDays: data.minAgeDays || 0, instructions: data.instructions || '', explanation: item.question }); if (item.id === 'newsletter') for (const label of ['University notices', 'Community discussions', 'Travel offers', 'Delivery updates']) tray.memories.push({ id: label, version: 1, scope: { kind: 'category', category: `topic_${label.toLowerCase().replaceAll(' ', '_')}`, label }, action: 'read', initialSampleIds: ['sample'] }); json = { status: 'saved' };
-    } else if (path === '/api/agent/memories/edit') { const data = route.request().postDataJSON(); const memory = tray.memories.find(m => m.id === data.memoryId); memory.action = data.action; memory.version++; json = { status: 'saved' }; }
+    } else if (path === '/api/agent/preferences/interpret') {
+      const data = route.request().postDataJSON();
+      const survey = data.text.includes('survey');
+      notesPreview = { supported: true, topics: [{ scope: { kind: 'category', category: survey ? 'surveys_feedback' : 'product_announcements', label: survey ? 'Surveys and feedback' : 'Product announcements' }, action: survey ? 'read' : 'archive', minAgeDays: survey ? 0 : 30, instructions: data.text, replaces: !survey }], context: '', token: 'fixture-preview' }; json = notesPreview;
+    } else if (path === '/api/agent/preferences/save') {
+      assert.equal(route.request().postDataJSON().token, 'fixture-preview');
+      for (const topic of notesPreview.topics) { const old = tray.memories.find(m => m.scope.category === topic.scope.category); if (old) Object.assign(old, topic, { version: old.version + 1 }); else tray.memories.push({ ...topic, id: 'written-topic', version: 1 }); }
+      notesSaved = true; json = { status: 'saved' };
+    } else if (path === '/api/agent/memories/edit') { const data = route.request().postDataJSON(); const memory = tray.memories.find(m => m.id === data.memoryId); if (data.remove) tray.memories = tray.memories.filter(m => m !== memory); else { Object.assign(memory, { action: data.action, minAgeDays: data.minAgeDays, instructions: data.instructions }); memory.version++; } json = { status: 'saved' }; }
     else if (path === '/api/agent/run') {
-      ran = true; assert.equal(state.rules.agent.topicActions, true); assert.equal(tray.memories.find(m => m.id === 'product').action, 'archive'); assert.equal(tray.memories.find(m => m.id === 'newsletter').action, 'read'); assert.equal(state.rules.agent.autoUnsubscribe, false);
+      ran = true; assert.equal(notesSaved, true); assert.equal(state.rules.agent.topicActions, true); assert.equal(tray.memories.find(m => m.id === 'product').action, 'archive'); assert.equal(tray.memories.find(m => m.id === 'newsletter').action, 'read'); assert.equal(state.rules.agent.autoUnsubscribe, false);
       return route.fulfill({ contentType: 'application/x-ndjson', body: [{ type: 'stage', message: 'Reading', total: 2 }, { type: 'decision', action: 'archive', subject: 'Promotion', reason: 'Low priority', inspected: 1, changed: 1, kept: 0, total: 2 }, { type: 'complete', inspected: 2, changed: 1, kept: 1 }].map(e => JSON.stringify(e)).join('\n') + '\n' });
     } else throw new Error(`Unexpected route: ${path}`);
     await route.fulfill({ json });
@@ -68,9 +77,39 @@ try {
   await page.locator('#ob-prev').click(); await page.locator('[aria-label="Action for product announcements"]').waitFor();
   assert.equal(await page.locator('[aria-label="Action for product announcements"]').inputValue(), 'archive');
   assert.equal(await page.locator('[aria-label="Action for newsletters"]').inputValue(), 'read');
-  await page.locator('#ob-start').click(); await page.getByRole('heading', { name: 'Your first fresh start.' }).waitFor(); await check('complete');
+  await page.locator('#ob-start').click(); await page.getByRole('heading', { name: 'Anything else we should know?' }).waitFor(); assert.equal(ran, false); await check('final-notes');
+  await page.locator('#ob-notes').fill('Archive product announcements after 30 days, but keep Apple announcements.');
+  await page.getByRole('button', { name: /Review my instructions/ }).click(); await page.locator('.notes-preview').waitFor(); await check('final-notes-preview');
+  assert.equal(notesSaved, false); assert.equal(ran, false);
+  await page.getByRole('button', { name: /Save these preferences/ }).click(); await page.getByRole('heading', { name: 'Your first fresh start.' }).waitFor(); await check('complete');
   await page.emulateMedia({ reducedMotion: 'reduce' }); assert.equal(await page.locator('.ob-content').evaluate(el => getComputedStyle(el).animationName), 'none');
   await page.locator('#ob-dashboard').click(); assert.equal(await page.locator('.sidebar').isVisible(), true);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.locator('.nav-item[data-page=rules]').click(); await page.getByRole('heading', { name: 'Your preferences', exact: true }).waitFor();
+  assert.equal(await page.locator('.preference-row').count(), 6);
+  assert.equal(await page.locator('.preference-row[open]').count(), 0);
+  assert.equal(await page.locator('.preference-settings[open]').count(), 0);
+  await page.screenshot({ path: `${output}/preferences-desktop.png` });
+  await page.locator('#preference-search').fill('product');
+  assert.equal(await page.locator('.preference-row').count(), 1);
+  await page.locator('.preference-row summary').click();
+  await page.locator('.memory-card select').selectOption('both');
+  await page.getByRole('button', { name: 'Save change', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.preference-row summary').textContent.includes('Read & archive'));
+  let cleanups = 0; page.on('request', request => { if (request.url().endsWith('/api/agent/run')) cleanups++; });
+  await page.locator('#preference-notes').fill('Mark survey requests as read.');
+  await page.getByRole('button', { name: /Review my instructions/ }).click(); await page.locator('.notes-preview').waitFor();
+  assert.equal(tray.memories.some(m => m.scope.category === 'surveys_feedback'), false);
+  await page.getByRole('button', { name: /Save these preferences/ }).click();
+  await page.waitForFunction(() => document.querySelector('#preference-notes').value === '');
+  assert.equal(tray.memories.find(m => m.scope.category === 'surveys_feedback').action, 'read'); assert.equal(cleanups, 0);
+  await page.locator('#preference-search').fill('');
+  await page.locator('[data-preference-page="1"]').click(); assert.equal(await page.locator('.preference-row').count(), 1);
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Preferences must not overflow horizontally');
+    await page.screenshot({ path: `${output}/preferences-${width}.png` });
+  }
   state.access = { ...state.access, used: 100, remaining: 0, recoveryAvailable: true }; state.runs = [{ status: 'completed', changed: 0, created: Date.now(), kind: 'cleanup' }];
   await page.reload(); await page.getByRole('heading', { name: 'Let’s take another look.' }).waitFor(); await check('repair-consent');
   assert.equal(repairRequested, false); await page.locator('#ob-consent').check(); await page.locator('#ob-discover').click();
@@ -82,5 +121,5 @@ try {
   assert.doesNotMatch(await page.locator('#onboarding').innerText(), /Nebius|Token Factory|OpenRouter|response limit|API|model/i);
   await check('plain-language-error');
   assert.deepEqual(errors, []);
-  console.log('PASS consent before analysis; no sidebar or scrolling at desktop/390px/320px; animated analysis; evidence-only sequential questions; reload resumes; independent topic actions and paginated review; streamed cleanup; reduced motion; workspace after completion. Gmail/model are fixtures.');
+  console.log('PASS consent; sequential questions; final written instructions preview and confirmation before cleanup; compact searchable/paginated preference editors; future written preferences save without running cleanup; mobile layouts; streamed cleanup; reduced motion. Gmail/model are fixtures.');
 } finally { await browser.close(); await app.close(); }
