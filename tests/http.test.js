@@ -33,6 +33,26 @@ test('unconfigured app serves real setup state, secure headers, and no invented 
   assert.equal((await call('/api/scan', { method: 'POST' })).status, 401);
   assert.equal((await call('/.env')).status, 404);
 });
+
+test('mailbox count includes only unread Primary inbox messages across all result pages', async t => {
+  const reads = [];
+  const { app, call } = await setup(t, true, {}, { clientFactory: account => async path => {
+    assert.equal(account.id, 'owner@example.invalid'); reads.push(path);
+    assert.ok(path.startsWith('messages?'), 'Count must not use the all-mail unread label or download message bodies');
+    const params = new URLSearchParams(path.split('?')[1]);
+    assert.equal(params.get('q'), 'in:inbox category:primary is:unread');
+    assert.equal(params.get('maxResults'), '500'); assert.equal(params.get('fields'), 'messages(id),nextPageToken');
+    return params.has('pageToken') ? { messages: [{ id: 'two' }, { id: 'three' }], resultSizeEstimate: 10000 } : { messages: [{ id: 'one' }, { id: 'two' }], nextPageToken: 'next', resultSizeEstimate: 20000 };
+  } });
+  const initial = await call('/api/status'); const cookie = initial.headers.get('set-cookie').split(';')[0];
+  const id = 'owner@example.invalid';
+  app.store.run('INSERT INTO accounts(id,email,tokens,rules,created) VALUES(?,?,?,?,?)', id, id, app.service.crypto.seal({}), JSON.stringify(DEFAULT_RULES), Date.now());
+  app.store.run('UPDATE sessions SET account_id=?', id);
+  const response = await call('/api/mailbox', { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200); const result = await response.json();
+  assert.equal(result.unread, 3); assert.equal(result.scope, 'primary'); assert.equal(result.messages, undefined);
+  assert.equal(reads.length, 2);
+});
 test('OAuth uses state and PKCE and callback rejects missing or foreign state without external calls', async t => {
   const { call } = await setup(t, true); const status = await call('/api/status'); const cookie = status.headers.get('set-cookie').split(';')[0];
   const start = await call('/auth/google', { headers: { Cookie: cookie } }); assert.equal(start.status, 302);

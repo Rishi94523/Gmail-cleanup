@@ -40,6 +40,9 @@ try {
     await route.fulfill({ json });
   });
   await page.goto('http://localhost:3070'); await page.waitForSelector('#agent-configure');
+  await page.waitForFunction(() => document.querySelector('#unread-caption').textContent === 'Unread emails in your Primary inbox');
+  assert.equal(await page.locator('#metric-unread').textContent(), '7,590');
+  assert.equal(await page.locator('.metric-label').first().textContent(), 'Unread in Primary');
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();
   await page.locator('.preference-settings:has(#preferences-form) > summary').click();
   assert.equal(await page.locator('#agent-consent').count(), 0);

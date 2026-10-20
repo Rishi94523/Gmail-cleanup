@@ -1,5 +1,20 @@
 import { headersOf, senderAddress, protectedReason } from './rules.js';
 import { chatJSON, missingAIKey } from './ai.js';
+import { PRIMARY_INBOX_QUERY } from './inbox-scope.js';
+
+export async function primaryUnreadCount(gmail) {
+  // Gmail's resultSizeEstimate is approximate. Count matching IDs across pages
+  // without downloading subjects, bodies, or attachments.
+  const ids = new Set(); const pages = new Set(); let pageToken;
+  do {
+    const page = await gmail(`messages?${new URLSearchParams({ q: PRIMARY_INBOX_QUERY, maxResults: '500', fields: 'messages(id),nextPageToken', ...(pageToken ? { pageToken } : {}) })}`);
+    for (const message of page.messages || []) ids.add(message.id);
+    pageToken = page.nextPageToken;
+    if (pageToken && pages.has(pageToken)) throw new Error('Primary unread count could not finish. Please try again.');
+    if (pageToken) pages.add(pageToken);
+  } while (pageToken);
+  return ids.size;
+}
 
 export async function jsonFetch(url, options = {}) {
   const response = await fetch(url, { ...options, signal: AbortSignal.timeout(20000) });

@@ -126,7 +126,7 @@ async function refresh(mailbox = false) {
   if (!samePlan) selected = new Set(plan?.decisions.filter(d => !d.reason).map(d => d.id) || []);
   render();
   if (mailbox && state.connected) {
-    try { const profile = await request('/api/mailbox'); $('#metric-unread').textContent = number(profile.unread); $('#unread-caption').textContent = `Across ${number(profile.messages)} emails in Gmail`; }
+    try { const profile = await request('/api/mailbox'); $('#metric-unread').textContent = number(profile.unread); $('#unread-caption').textContent = 'Unread emails in your Primary inbox'; }
     catch (err) { $('#unread-caption').textContent = 'Mailbox count unavailable'; error(err.message); }
   }
   if (state.connected) await loadLearning();

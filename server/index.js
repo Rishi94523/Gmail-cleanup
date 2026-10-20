@@ -8,7 +8,7 @@ import { openPostgresStore } from './postgres-store.js';
 import { encryption, randomToken, hash } from './security.js';
 import { DEFAULT_RULES } from './rules.js';
 import { InboxService } from './service.js';
-import { jsonFetch } from './gmail.js';
+import { jsonFetch, primaryUnreadCount } from './gmail.js';
 import { learnInbox, runAgent } from './agent.js';
 import { aiConfig } from './ai.js';
 import { learningTray, answerPreference, editMemory, interpretPreference, interpretNotes, saveNotes } from './learning.js';
@@ -110,9 +110,8 @@ export async function createApp(options = {}) {
         const id = session.account_id;
         if (req.method === 'GET' && url.pathname === '/api/agent/questions') return json(res, 200, await learningTray(service, id));
         if (req.method === 'GET' && url.pathname === '/api/mailbox') {
-          const gmail = service.client(await service.account(id));
-          const [profile, labels] = await Promise.all([gmail('profile'), gmail('labels/UNREAD')]);
-          return json(res, 200, { email: profile.emailAddress, messages: profile.messagesTotal, unread: labels.messagesUnread ?? labels.messagesTotal ?? 0 });
+          const account = await service.account(id); const gmail = service.client(account);
+          return json(res, 200, { email: account.email, unread: await primaryUnreadCount(gmail), scope: 'primary' });
         }
         if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
         if (req.headers.origin !== origin || req.headers['x-csrf-token'] !== session.csrf || !req.headers['content-type']?.startsWith('application/json')) return json(res, 403, { error: 'Request could not be verified. Reload the app and try again.' });
