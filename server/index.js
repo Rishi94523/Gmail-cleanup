@@ -139,6 +139,7 @@ export async function createApp(options = {}) {
           return;
         }
         if (url.pathname === '/api/rules') return json(res, 200, { rules: await service.saveRules(id, input) });
+        if (url.pathname === '/api/routine/pause') return json(res, 200, await service.pauseDaily(id, input.duration));
         if (['/api/scan', '/api/discover', '/api/apply', '/api/unsubscribe'].includes(url.pathname)) await requirePaid(service, id);
         if (url.pathname === '/api/scan') return json(res, 200, { plan: await service.scan(id, 'manual', typeof input.nextPlanId === 'string' ? input.nextPlanId : null) });
         if (url.pathname === '/api/discover') return json(res, 200, await service.discover(id));

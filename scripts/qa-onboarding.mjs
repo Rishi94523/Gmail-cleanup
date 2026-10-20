@@ -22,6 +22,7 @@ try {
     else if (path === '/api/mailbox') json = { unread: 20000, messages: 25000 };
     else if (path === '/api/agent/questions') json = { ...tray, questionsTotal: tray.questions.length };
     else if (path === '/api/rules') { const data = route.request().postDataJSON(); state.rules = { ...data, agent: { ...DEFAULT_PREFERENCES, ...data.agent } }; json = { rules: state.rules }; }
+    else if (path === '/api/routine/pause') { const duration = route.request().postDataJSON().duration; state.rules.dailyPausedUntil = duration === 'resume' ? 0 : duration === 'indefinite' ? -1 : Date.now() + ({ day: 1, week: 7, month: 30 })[duration] * 86400000; json = { rules: state.rules }; }
     else if (path === '/api/agent/reassess-trial') { assert.equal(route.request().postDataJSON().authorize, true); repairRequested = true; state.access = { ...state.access, recoveryAvailable: false, recovering: true, remaining: 100 }; json = { status: 'ready', sampleCount: 100 }; }
     else if (path === '/api/agent/learn') { if (discoveryFails) return route.fulfill({ status: 400, json: { error: 'Nebius Token Factory reached its response limit before returning a complete decision.', code: 'AI_TRUNCATED' } }); learned = true; await discoveryGate; tray.discovery = { inspected: 100, evidenceCategories: ['product_announcements', 'newsletters'], summary: 'Product updates and publications recur.', suggestions: [] }; json = tray.discovery; }
     else if (path === '/api/agent/questions/interpret') { const data = route.request().postDataJSON(); assert.match(data.text, /90 days/); json = { supported: true, action: 'archive', minAgeDays: 90, instructions: data.text }; }
@@ -89,6 +90,7 @@ try {
   assert.equal(await page.locator('.preference-row').count(), 6);
   assert.equal(await page.locator('.preference-row[open]').count(), 0);
   assert.equal(await page.locator('.preference-settings[open]').count(), 0);
+  assert.equal(await page.locator('#agent-consent, #rule-daily, #rule-hour, #rule-ai').count(), 0, 'Consent belongs to onboarding and schedule belongs to one settings section');
   await page.screenshot({ path: `${output}/preferences-desktop.png` });
   await page.locator('#preference-search').fill('product');
   assert.equal(await page.locator('.preference-row').count(), 1);
@@ -105,6 +107,26 @@ try {
   assert.equal(tray.memories.find(m => m.scope.category === 'surveys_feedback').action, 'read'); assert.equal(cleanups, 0);
   await page.locator('#preference-search').fill('');
   await page.locator('[data-preference-page="1"]').click(); assert.equal(await page.locator('.preference-row').count(), 1);
+  state.schedulerActive = true; state.access.tier = 'hackathon'; state.rules.daily = true;
+  await page.reload(); await page.locator('.nav-item[data-page=rules]').click();
+  await page.locator('.preference-settings:has(#preferences-form) > summary').click();
+  for (const [duration, days] of [['day', 1], ['week', 7], ['month', 30]]) {
+    const start = Date.now(); await page.locator('#routine-pause-duration').selectOption(duration); await page.locator('#routine-pause').click();
+    await page.waitForFunction(() => document.body.getAttribute('aria-busy') === 'false' && document.querySelector('#routine-pause-status').textContent.includes('Resumes automatically'));
+    assert.ok(state.rules.dailyPausedUntil >= start + days * 86400000);
+    assert.equal(state.rules.daily, true); assert.equal(state.rules.agent.consent, true);
+  }
+  await page.locator('#routine-pause-duration').selectOption('indefinite'); await page.locator('#routine-pause').click();
+  await page.waitForFunction(() => document.body.getAttribute('aria-busy') === 'false' && document.querySelector('#routine-pause-status').textContent.includes('until you resume'));
+  assert.equal(state.rules.dailyPausedUntil, -1);
+  await page.reload(); await page.locator('.nav-item[data-page=rules]').click();
+  await page.locator('.preference-settings:has(#preferences-form) > summary').click();
+  assert.match(await page.locator('#routine-pause-status').textContent(), /until you resume/);
+  await page.screenshot({ path: `${output}/daily-routine-paused.png`, fullPage: true });
+  await page.locator('#routine-resume').click();
+  await page.waitForFunction(() => document.body.getAttribute('aria-busy') === 'false' && document.querySelector('#routine-pause-status').textContent.includes('active'));
+  assert.equal(state.rules.dailyPausedUntil, 0); assert.equal(state.rules.daily, true);
+  assert.equal(cleanups, 0, 'Changing pauses must not invoke manual cleanup');
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Preferences must not overflow horizontally');
@@ -124,7 +146,7 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `Advanced settings overflow at ${width}px`);
     await page.locator('.legacy-settings').screenshot({ path: `${output}/advanced-${width}.png` });
   }
-  state.access = { ...state.access, used: 100, remaining: 0, recoveryAvailable: true }; state.runs = [{ status: 'completed', changed: 0, created: Date.now(), kind: 'cleanup' }];
+  state.access = { ...state.access, tier: 'free', used: 100, remaining: 0, recoveryAvailable: true }; state.runs = [{ status: 'completed', changed: 0, created: Date.now(), kind: 'cleanup' }];
   await page.reload(); await page.getByRole('heading', { name: 'Let’s take another look.' }).waitFor(); await check('repair-consent');
   assert.equal(repairRequested, false); await page.locator('#ob-consent').check(); await page.locator('#ob-discover').click();
   await page.getByRole('heading', { name: 'Your preferences, ready.' }).waitFor(); assert.equal(repairRequested, true);

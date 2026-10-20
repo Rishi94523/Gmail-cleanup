@@ -56,12 +56,7 @@ function renderRules() {
   $('#rule-days').value = rules.days;
   $$('input[name=category]').forEach(el => { el.checked = rules.categories.includes(el.value); });
   $('#rule-archive').checked = rules.archive; $('#rule-read').checked = rules.markRead;
-  $('#rule-protected').value = rules.protectedSenders.join('\n'); $('#rule-daily').checked = rules.daily;
-  $('#rule-hour').value = rules.hour;
-  if (!$$('#rule-zone option').some(option => option.value === rules.timezone)) $('#rule-zone').add(new Option(rules.timezone, rules.timezone));
-  $('#rule-zone').value = rules.timezone; $('#rule-ai').checked = rules.aiEnabled && rules.aiConsentProvider === (state.aiProvider || 'nebius');
-  $('#rule-ai').disabled = !state.aiConfigured;
-  $('#ai-status').textContent = state.aiConfigured ? 'Enable only if you agree to AI processing.' : 'AI assistance is temporarily unavailable. You can still save your preferences.';
+  $('#rule-protected').value = rules.protectedSenders.join('\n');
   $('#connection-settings-copy').textContent = state.connected ? `Connected as ${state.email}` : 'Connect Gmail to save your preferences.';
   $('#disconnect-button').hidden = !state.connected;
 }
@@ -108,10 +103,12 @@ function render() {
   $('#agent-pill').classList.toggle('on', connected && rules.daily && state.schedulerActive); $('#agent-pill').innerHTML = `<i></i> ${connected && rules.daily && state.schedulerActive ? 'Daily agent on' : 'Agent paused'}`;
   $('#metric-cleaned').textContent = connected ? number(state.totals?.cleaned) : '—';
   $('#metric-unsubscribed').textContent = connected ? number(state.totals?.requested) : '—';
-  $('#metric-routine').textContent = rules.daily && connected ? 'Every day' : 'Not set';
+  $('#metric-routine').textContent = rules.daily && connected ? (isRoutinePaused(rules) ? 'Paused' : 'Every day') : 'Not set';
   const hour = `${String(rules.hour).padStart(2, '0')}:00`;
+  const routinePaused = isRoutinePaused(rules);
+  if (routinePaused) { $('#agent-pill').classList.remove('on'); $('#agent-pill').innerHTML = '<i></i> Daily routine paused'; }
   $('#routine-caption').textContent = connected && rules.daily ? `${hour} · ${rules.timezone}` : 'A quieter inbox on autopilot';
-  $('#routine-time').textContent = hour; $('#routine-zone').textContent = rules.timezone; $('#routine-state').textContent = connected && rules.daily ? 'Enabled' : 'Paused';
+  $('#routine-time').textContent = hour; $('#routine-zone').textContent = rules.timezone; $('#routine-state').textContent = connected && rules.daily && !routinePaused ? 'Enabled' : 'Paused';
   $('#routine-button').textContent = connected && rules.daily ? 'Manage my daily routine ↗' : 'Set up my daily routine ↗';
   $('#rules-summary').textContent = `${rules.categories.map(c => c[0].toUpperCase() + c.slice(1)).join(' & ')} · older than ${rules.days} days`;
   $('#actions-summary').textContent = `${rules.archive ? 'Archive to “Cleaned by agent”' : 'Keep in inbox with “Cleaned by agent” label'} · ${rules.markRead ? 'mark as read' : 'keep unread status'}`;
@@ -137,13 +134,12 @@ async function refresh(mailbox = false) {
   queueMicrotask(() => maybeDiscover());
 }
 function rulesInput() {
-  return { days: Number($('#rule-days').value), categories: $$('input[name=category]:checked').map(input => input.value), archive: $('#rule-archive').checked, markRead: $('#rule-read').checked, protectedSenders: $('#rule-protected').value.split(/[\n,]+/).map(s => s.trim()).filter(Boolean), daily: $('#rule-daily').checked, hour: Number($('#rule-hour').value), timezone: $('#rule-zone').value, aiEnabled: $('#rule-ai').checked, aiConsentProvider: $('#rule-ai').checked ? (state.aiProvider || 'nebius') : '' };
+  return { ...state.rules, days: Number($('#rule-days').value), categories: $$('input[name=category]:checked').map(input => input.value), archive: $('#rule-archive').checked, markRead: $('#rule-read').checked, protectedSenders: $('#rule-protected').value.split(/[\n,]+/).map(s => s.trim()).filter(Boolean), aiEnabled: false, aiConsentProvider: '' };
 }
-for (let i = 0; i < 24; i++) $('#rule-hour').add(new Option(`${String(i).padStart(2, '0')}:00`, i));
 $$('[data-page]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.page)));
 $$('[data-goto]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.goto)));
 $('#account-button').addEventListener('click', () => state?.connected ? showPage('rules') : connect());
-$('#routine-button').addEventListener('click', () => { showPage('rules'); $('#rule-daily').focus(); });
+$('#routine-button').addEventListener('click', () => { showPage('rules'); $('#preferences-form').closest('details').open = true; $('#pref-daily').focus(); });
 $('#rules-form').addEventListener('submit', event => { event.preventDefault(); operation($('#save-rules'), 'Saving…', async () => { await request('/api/rules', rulesInput()); await refresh(); toast('Your rules are saved. Scan again for a fresh preview.'); }); });
 $('#scan-button').addEventListener('click', () => operation($('#scan-button'), 'Reviewing up to 100 emails…', async () => { const result = await request('/api/scan', {}); await refresh(); plan = result.plan; selected = new Set(plan.decisions.filter(d => !d.reason).map(d => d.id)); renderPreview(); $('#preview-section').scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
 $('#discover-button').addEventListener('click', () => operation($('#discover-button'), 'Finding mailing lists…', async () => { const result = await request('/api/discover', {}); await refresh(); toast(`Inspected ${number(result.inspected)} recent messages for subscriptions.`); }));
@@ -201,47 +197,62 @@ function renderAgentControls() {
   const p = { ...agentDefaults, ...state.rules.agent };
   const consentMatches = p.consentProvider === (state.aiProvider || 'nebius');
   $('#agent-start').disabled = (state.access?.tier === 'free' && !state.access.remaining) || busy || !state.connected || !state.aiConfigured || !p.enabled || !consentMatches;
-  $('#agent-learn').disabled = busy || !state.connected || !state.aiConfigured || !$('#agent-consent').checked;
+  $('#agent-learn').disabled = busy || !state.connected || !state.aiConfigured;
+  $('#agent-learn').textContent = hasAIConsent() ? 'Review inbox preferences' : 'Finish setup';
   $('#save-preferences').disabled = busy || !state.connected;
   $('#exception-save').disabled = busy || !state.connected;
   $('#agent-configure').textContent = p.enabled ? 'Edit preferences →' : 'Set my preferences →';
   $('#agent-heading').textContent = p.enabled && consentMatches ? 'Your agent is ready.' : 'Let’s get to know your inbox.';
   $('#agent-status').textContent = !state.aiConfigured ? 'AI setup needed' : p.enabled && consentMatches ? 'Ready' : 'Preferences needed';
   $('#agent-provider-note').textContent = state.aiConfigured ? 'Your agent follows your saved preferences. You can change them anytime.' : 'AI assistance is temporarily unavailable. You can still save your preferences.';
-  $('#agent-consent-description').textContent = 'Allows our AI service to analyze sender details, subjects and email text to make cleanup decisions. Attachments are excluded.';
+  $('#agent-processing-note').textContent = hasAIConsent() ? 'You allowed AI processing during setup. Your agent uses email subjects, senders and text to follow your preferences; attachments are excluded.' : 'Finish setup to allow AI processing before your agent reads email. You can disconnect Gmail in Account settings.';
   const free = state.access?.tier === 'free';
   $('#agent-start').textContent = free ? (state.access.remaining ? `Clean up to ${state.access.remaining} emails →` : 'Free cleanup used') : 'Start my agent →';
   $('.agent-budget').textContent = free ? `Free cleanup: ${state.access.used} of 100 Primary emails processed. Daily and additional cleanups are for paid plans. Paid plans are not on sale yet.` : `Each run checks up to ${state.access?.limit || 500} unread messages in Primary. Daily cleanup is included. Nothing is deleted.`;
   $('#save-preferences').textContent = 'Save settings →';
-  $('#rule-daily').disabled = free || !state.schedulerActive;
   $('#pref-action').closest('.preference-card').hidden = Boolean(p.topicActions);
   $('#pref-daily').disabled = free || !state.schedulerActive;
   $('#agent-schedule-note').textContent = free ? 'Daily cleanup is reserved for paid plans. Your free first cleanup covers up to 100 emails.' : state.schedulerActive ? 'Runs at your chosen time, even when your browser is closed.' : 'Daily cleanup needs to be connected. You can still start a cleanup yourself.';
+  renderRoutinePause();
 }
 function renderAgentPreferences() {
   const p = { ...agentDefaults, ...state.rules.agent };
-  for (const [key, id] of [['consent','agent-consent'], ['keepJobs','pref-jobs'], ['keepPeople','pref-people'], ['keepNewsletters','pref-newsletters'], ['autoUnsubscribe','pref-auto-unsubscribe']]) $(`#${id}`).checked = p[key];
-  if (p.consentProvider !== (state.aiProvider || 'nebius')) $('#agent-consent').checked = false;
+  for (const [key, id] of [['keepJobs','pref-jobs'], ['keepPeople','pref-people'], ['keepNewsletters','pref-newsletters'], ['autoUnsubscribe','pref-auto-unsubscribe']]) $(`#${id}`).checked = p[key];
   for (const [key, id] of [['coldMail','pref-cold'], ['action','pref-action'], ['exceptions','pref-exceptions'], ['interests','pref-interests']]) $(`#${id}`).value = p[key];
   $('#pref-daily').checked = state.rules.daily; $('#pref-hour').value = state.rules.hour; $('#pref-zone').value = state.rules.timezone;
+  renderRoutinePause();
   renderExceptions();
   renderAgentControls();
 }
-$('#agent-consent').addEventListener('change', () => { renderAgentControls(); maybeDiscover(); });
+function isRoutinePaused(rules = state?.rules) { return rules?.dailyPausedUntil === -1 || (rules?.dailyPausedUntil || 0) > Date.now(); }
+function renderRoutinePause() {
+  const paused = isRoutinePaused(); const until = state.rules.dailyPausedUntil;
+  $('#routine-pause-status').textContent = !state.rules.daily ? 'Daily routine is off.' : paused ? (until === -1 ? 'Paused until you resume.' : `Paused until ${new Intl.DateTimeFormat(undefined, { timeZone: state.rules.timezone, dateStyle: 'medium', timeStyle: 'short' }).format(until)}. Resumes automatically.`) : 'Your saved daily routine is active.';
+  $('#routine-resume').hidden = !paused;
+  $('#routine-resume').disabled = busy || !state.connected;
+  $('#routine-pause').disabled = busy || !state.connected || !state.rules.daily;
+}
+for (const [buttonId, duration] of [['routine-pause', null], ['routine-resume', 'resume']]) {
+  $(`#${buttonId}`).addEventListener('click', event => operation(event.currentTarget, 'Saving…', async () => {
+    await request('/api/routine/pause', { duration: duration || $('#routine-pause-duration').value });
+    await refresh(); toast(duration === 'resume' ? (state.rules.daily ? 'Daily routine resumed.' : 'Pause removed. Enable your daily routine to run it.') : 'Daily routine paused. Your preferences are saved.');
+  }));
+}
+function hasAIConsent() { return state?.rules.agent?.consent === true && state.rules.agent.consentProvider === (state.aiProvider || 'nebius'); }
 function maybeDiscover() {
-  if (document.body.classList.contains('booting') || onboarding.active || !state?.connected || !state.aiConfigured || busy || discoveryStarted || learningState.discovery || !$('#agent-consent').checked) return;
+  if (document.body.classList.contains('booting') || onboarding.active || !state?.connected || !state.aiConfigured || busy || discoveryStarted || learningState.discovery || !hasAIConsent()) return;
   discoveryStarted = true;
   operation($('#agent-learn'), 'Learning your inbox…', async () => {
-  const learned = await request('/api/agent/learn', { consent: $('#agent-consent').checked, provider: state.aiProvider || 'nebius' });
+  const learned = await request('/api/agent/learn', { consent: hasAIConsent(), provider: state.aiProvider || 'nebius' });
   renderDiscovery(learned); await loadLearning();
   });
 }
-$('#agent-learn').addEventListener('click', () => { discoveryStarted = false; learningState.discovery = null; maybeDiscover(); });
+$('#agent-learn').addEventListener('click', () => { if (!hasAIConsent()) return onboarding.open().catch(err => error(err.message)); discoveryStarted = false; learningState.discovery = null; maybeDiscover(); });
 $('#preferences-form').addEventListener('submit', event => {
   event.preventDefault();
-  const consent = $('#agent-consent').checked;
+  const consent = hasAIConsent();
   const agent = { ...state.rules.agent, consent, consentProvider: consent ? (state.aiProvider || 'nebius') : '', enabled: consent && state.aiConfigured, keepJobs: $('#pref-jobs').checked, keepPeople: $('#pref-people').checked, keepNewsletters: $('#pref-newsletters').checked, autoUnsubscribe: $('#pref-auto-unsubscribe').checked, coldMail: $('#pref-cold').value, action: $('#pref-action').value, exceptions: $('#pref-exceptions').value, interests: $('#pref-interests').value };
-  const rules = { ...state.rules, agent, aiEnabled: state.rules.aiEnabled && state.rules.aiConsentProvider === (state.aiProvider || 'nebius'), daily: agent.enabled && state.schedulerActive && $('#pref-daily').checked, hour: Number($('#pref-hour').value), timezone: $('#pref-zone').value };
+  const rules = { ...state.rules, agent, aiEnabled: false, aiConsentProvider: '', daily: agent.enabled && state.schedulerActive && $('#pref-daily').checked, hour: Number($('#pref-hour').value), timezone: $('#pref-zone').value };
   operation($('#save-preferences'), 'Saving…', async () => { await request('/api/rules', rules); await refresh(); toast(agent.enabled ? 'Settings saved for future cleanups.' : 'Settings saved. Your agent is paused.'); });
 });
 async function startAgent(onEvent = () => {}) {

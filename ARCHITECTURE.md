@@ -16,6 +16,8 @@ The same Node service serves the React landing page, workspace, OAuth callback a
 
 Local development uses an in-process minute timer. Cloud Run uses Cloud Scheduler every five minutes, with a Google-signed OIDC identity token verified for the exact audience and expected scheduler service account. Only users who enabled daily cleanup are eligible. A database lease and an account-local daily claim prevent duplicate runs across replicas and retries. The browser can be closed, and the service can scale to zero between requests.
 
+The account's rules JSON stores `dailyPausedUntil`: 0 for no pause, -1 until resumed, or an absolute timestamp for 1/7/30-day pauses. Scheduler eligibility and active daily runs check the pause; skipped accounts do not claim the day. A CSRF-protected pause/resume endpoint preserves the schedule, preferences and onboarding consent. Pauses do not block manual runs or enable an otherwise disabled routine. No schema migration is required for existing accounts.
+
 `HACKATHON_MODE=true` enables repeat manual runs and daily cleanups, capped at 100 Primary emails per run. The retained commercial allowance code is inactive in this mode; it is not a payment system. Account/model concurrency remains bounded. This demo deployment is not a verified thousand-concurrent-user capacity claim.
 
 ## Storage and observability

@@ -18,3 +18,4 @@
 
 /* Keep advanced checkbox groups inside their column, below their legend. */
 .legacy-settings fieldset,.legacy-settings .settings-main,.legacy-settings .settings-side{min-width:0}.legacy-settings .check-row{clear:both;width:100%}.legacy-settings .check-row>span{min-width:0;overflow-wrap:anywhere}.legacy-settings legend{max-width:100%;overflow-wrap:anywhere}
+.routine-pause-controls{margin-top:22px;padding-top:16px;border-top:1px solid var(--line)}.routine-pause-controls>p{margin:0 0 14px}.routine-pause-controls>small{display:block;font-size:14px;line-height:1.6;color:var(--muted);margin-top:12px}.routine-pause-controls .custom-buttons{gap:12px}.preferences-form>label>small{display:block;color:var(--muted);font-size:15px;font-weight:400;margin-top:5px;line-height:1.6}

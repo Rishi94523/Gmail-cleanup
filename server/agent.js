@@ -6,7 +6,7 @@ import { discoveryEvidence } from './discovery-evidence.js';
 import { PRIMARY_INBOX_QUERY, outsidePrimary } from './inbox-scope.js';
 import { accessFor, requirePaid, trialSample, reserveDiscovery, reserveFreeEmail } from './access.js';
 import { randomUUID, createHash } from 'node:crypto';
-import { headersOf, senderAddress } from './rules.js';
+import { headersOf, senderAddress, dailyIsPaused } from './rules.js';
 import { chatJSON, missingAIKey } from './ai.js';
 import { ASK_PREFERENCE_TOOL, QUESTION_EXPLANATION_GUIDANCE, scopeFor, memoryFor, categoryContext, askPreference, holdEmail } from './learning.js';
 import { PREFERENCE_CATEGORIES, categoryScope, matchingException, validateExceptions, discoveryModelKey } from './preference-categories.js';
@@ -181,7 +181,7 @@ export async function runAgent(service, id, guard, emit = () => {}, mode = 'manu
   if (!p.enabled || !p.consent || !service.config.aiKey) throw new Error('Save your preferences and enable AI processing before starting the agent.');
   if (p.consentProvider !== (service.config.aiProvider || 'nebius')) throw new Error('AI provider changed. Confirm AI processing again in Preferences before running the agent.');
   const access = await accessFor(service, id);
-  if (mode === 'daily') await requirePaid(service, id);
+  if (mode === 'daily') { await requirePaid(service, id); if (!account.rules.daily || dailyIsPaused(account.rules)) throw new Error('Daily routine is paused.'); }
   if (access.tier === 'free' && !access.remaining) throw new Error('Your free 100-email cleanup is complete. Additional and daily cleanups require a paid plan.');
   const perRunLimit = access.tier === 'hackathon' ? 100 : 500;
   const firstHackathonRun = access.tier === 'hackathon' && !(await service.store.get("SELECT count(*) AS total FROM runs WHERE account_id=? AND kind IN ('cleanup','daily')", id)).total;
@@ -243,7 +243,7 @@ export async function runAgent(service, id, guard, emit = () => {}, mode = 'manu
       if (infer !== modelDecision && access.tier === 'free' && !await reserveFreeEmail(service, id, messageId, access.recovering)) continue;
       const latest = await service.account(id);
       if (mode === 'daily') await requirePaid(service, id);
-      if (JSON.stringify(latest.rules) !== JSON.stringify(account.rules) || (mode === 'daily' && !latest.rules.daily)) throw new Error('Preferences changed. Agent stopped; remaining emails were left unchanged.');
+      if (JSON.stringify(latest.rules) !== JSON.stringify(account.rules) || (mode === 'daily' && (!latest.rules.daily || dailyIsPaused(latest.rules)))) throw new Error('Preferences changed. Agent stopped; remaining emails were left unchanged.');
       if (infer === modelDecision && !prepared.has(messageId)) {
         const window = ids.slice(index, index + 20);
         send({ type: 'stage', message: `Reading the next ${window.length} emails`, inspected: decisions.length, total: ids.length });

@@ -12,7 +12,7 @@ await new Promise(resolve => app.server.listen(3070, '127.0.0.1', resolve));
 const browser = await chromium.launch({ executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } }); const errors = []; page.on('pageerror', e => errors.push(e.message));
-  const state = { connected: true, configured: true, aiConfigured: true, aiProvider: 'nebius', aiModel: 'nvidia/Nemotron-3.5-Super-VL', schedulerActive: false, preferenceCategories: PREFERENCE_CATEGORIES, access: { tier: 'free', used: 0, remaining: 100, dailyAllowed: false }, csrf: 'fixture-only', email: 'test@example.invalid', rules: { ...DEFAULT_RULES, agent: { enabled: true } }, runs: [], subscriptions: [], plan: null, totals: {} }; let learned = false; let ran = false;
+  const state = { connected: true, configured: true, aiConfigured: true, aiProvider: 'nebius', aiModel: 'nvidia/Nemotron-3.5-Super-VL', schedulerActive: false, preferenceCategories: PREFERENCE_CATEGORIES, access: { tier: 'free', used: 0, remaining: 100, dailyAllowed: false }, csrf: 'fixture-only', email: 'test@example.invalid', rules: { ...DEFAULT_RULES, agent: { enabled: true, consent: true, consentProvider: 'nebius' } }, runs: [], subscriptions: [], plan: null, totals: {} }; let learned = false; let ran = false;
   const tray = { questions: [], memories: [], discovery: null, questionsTotal: 0 };
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname;
@@ -40,13 +40,14 @@ try {
     await route.fulfill({ json });
   });
   await page.goto('http://localhost:3070'); await page.waitForSelector('#agent-configure');
-  assert.equal(await page.locator('#agent-start').isDisabled(), true);
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();
-  assert.equal(await page.locator('#agent-learn').isDisabled(), true);
-  await page.locator('#agent-consent').check(); await page.waitForFunction(() => document.querySelector('#agent-suggestions').textContent.includes('100 messages'));
+  await page.locator('.preference-settings:has(#preferences-form) > summary').click();
+  assert.equal(await page.locator('#agent-consent').count(), 0);
+  await page.locator('#agent-learn').click();
+  await page.waitForFunction(() => document.querySelector('#agent-suggestions').textContent.includes('100 messages'));
   assert.equal(learned, true); assert.equal(ran, false);
   await page.locator('#pref-interests').fill('Software engineering roles');
-  await page.locator('#save-preferences').click(); await page.waitForSelector('#page-questions:not([hidden])');
+  await page.locator('#save-preferences').click(); await page.waitForFunction(() => document.body.getAttribute('aria-busy') === 'false');
   assert.equal(await page.locator('#pref-daily').isDisabled(), true);
   assert.equal(state.rules.agent.action, 'read'); assert.equal(state.rules.agent.enabled, true); assert.equal(state.rules.daily, false);
   assert.equal(state.rules.agent.consentProvider, 'nebius');
@@ -64,12 +65,14 @@ try {
   await page.getByRole('button', { name: /Save this preference/ }).click(); await page.waitForFunction(() => document.querySelector('#question-count').textContent === '0');
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();
   assert.equal(await page.locator('#learned-preferences [name=minAgeDays]').inputValue(), '90');
+  await page.locator('.preference-row > summary').click();
   await page.locator('#learned-preferences [name=instructions]').fill('Keep Apple and Mozilla announcements.');
   await page.locator('#learned-preferences [name=minAgeDays]').fill('180');
   await page.locator('#learned-preferences select').selectOption('keep'); await page.locator('#learned-preferences button[type=submit]').click();
-  await page.waitForFunction(() => document.querySelector('#learned-preferences small').textContent.includes('Version 2'));
+  await page.waitForFunction(() => document.querySelector('.preference-row summary small').textContent.includes('Keep in inbox'));
   assert.equal(tray.memories[0].action, 'keep');
   assert.equal(tray.memories[0].minAgeDays, 180); assert.match(tray.memories[0].instructions, /Mozilla/);
+  await page.locator('.preference-settings:has(#exception-form) > summary').click();
   await page.locator('#exception-value').fill('apple.com');
   await page.locator('#exception-category').selectOption('product_announcements'); await page.locator('#exception-action').selectOption('read');
   await page.locator('#exception-save').click(); await page.waitForSelector('#sender-exceptions [data-remove-exception]');
@@ -92,10 +95,10 @@ try {
   await page.screenshot({ path: resolve(output, 'agent-mobile.png'), fullPage: true });
   state.rules.agent.consentProvider = ''; await page.reload();
   await page.getByRole('button', { name: 'Preferences', exact: true }).first().click();
-  await page.waitForFunction(() => document.querySelector('#agent-consent-description').textContent.includes('our AI service'));
-  assert.equal(await page.locator('#agent-consent').isChecked(), false);
+  await page.waitForFunction(() => document.querySelector('#agent-processing-note').textContent.includes('Finish setup'));
+  assert.equal(await page.locator('#agent-consent').count(), 0);
   assert.doesNotMatch(await page.locator('body').innerText(), /Nebius|Token Factory|OpenRouter|fixture-model|API_KEY|README|\.env\b/i);
   assert.equal(await page.locator('#agent-start').isDisabled(), true);
   assert.deepEqual(errors, []);
-  console.log('PASS automatic discovery after consent, persistent MCQ tray, answering and editing learned preferences, desktop/mobile layout, provider consent, paid-only daily controls, exhaustion controls, and streamed decisions. Gmail and AI were test fixtures; no live email actions.');
+  console.log('PASS automatic discovery using saved onboarding consent, persistent MCQ tray, answering and editing learned preferences, desktop/mobile layout, provider consent, paid-only daily controls, exhaustion controls, and streamed decisions. Gmail and AI were test fixtures; no live email actions.');
 } finally { await browser.close(); await app.close(); }

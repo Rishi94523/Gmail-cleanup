@@ -35,6 +35,11 @@ test('daily run uses the selected timezone and hour', () => {
   const rules = { ...DEFAULT_RULES, hour: 9, timezone: 'Asia/Kolkata' };
   assert.equal(dailyKey(rules, new Date('2026-10-16T03:29:00Z')), null);
   assert.equal(dailyKey(rules, new Date('2026-10-16T03:30:00Z')), '2026-10-16');
+  const until = new Date('2026-10-17T03:30:00Z').getTime();
+  assert.equal(dailyKey({ ...rules, dailyPausedUntil: until }, new Date('2026-10-17T03:29:59Z')), null);
+  assert.equal(dailyKey({ ...rules, dailyPausedUntil: until }, new Date(until)), '2026-10-17');
+  assert.equal(dailyKey({ ...rules, dailyPausedUntil: -1 }, new Date('2030-10-17T03:30:00Z')), null);
+  for (const value of [-2, 'tomorrow', 0.5, Infinity]) assert.throws(() => validateRules({ ...rules, dailyPausedUntil: value }), /pause/);
 });
 test('encrypted tokens round trip and tampering fails', () => {
   const cipher = encryption(randomBytes(32).toString('base64'));

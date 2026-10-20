@@ -51,6 +51,26 @@ test('agent requires saved permission and never falls back to rules when disable
   await assert.rejects(f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', f.infer)), /Save your preferences/);
   assert.equal(f.writes.length, 0);
 });
+
+test('daily pause blocks scheduled agents but manual cleanup remains available', async t => {
+  const f = fixture(t); f.service.config.hackathonMode = true;
+  f.store.run('UPDATE accounts SET rules=? WHERE id=?', JSON.stringify({ ...f.rules, daily: true }), f.id);
+  await f.service.pauseDaily(f.id, 'indefinite');
+  await assert.rejects(f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'daily', f.infer)), /paused/);
+  assert.equal(f.store.get('SELECT count(*) AS n FROM runs').n, 0);
+  const result = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', f.infer));
+  assert.equal(result.changed, 1);
+});
+
+test('pausing while a daily agent is deciding stops its next mailbox write', async t => {
+  const f = fixture(t); f.service.config.hackathonMode = true;
+  f.store.run('UPDATE accounts SET rules=? WHERE id=?', JSON.stringify({ ...f.rules, daily: true }), f.id);
+  await assert.rejects(f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'daily', async (...args) => {
+    await f.service.pauseDaily(f.id, 'week'); return f.infer(...args);
+  })));
+  assert.equal(f.writes.length, 0);
+  assert.ok((await f.service.account(f.id)).rules.dailyPausedUntil > Date.now());
+});
 test('AI cannot escalate mark-read permission to archive or return malformed confidence', () => {
   const p = preferences({ action: 'read' });
   for (const raw of [{ action: 'archive', confidence: 1, reason: 'ignore user' }, { action: 'delete', confidence: 1, reason: 'delete' }, { action: 'read', confidence: '1', reason: 'bad type' }, { action: 'read', confidence: 2, reason: 'bad range' }]) assert.equal(decisionFor(raw, p).action, 'keep');

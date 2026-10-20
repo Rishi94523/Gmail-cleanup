@@ -76,6 +76,55 @@ test('daily agent runs once per account-local day and only after explicit enabli
   await f.service.daily(); assert.equal(f.writes.length, 2);
   assert.equal(f.store.get('SELECT kind FROM runs').kind, 'daily');
 });
+
+test('daily pauses persist per account, preserve settings, validate durations, and do not enable a disabled routine', async t => {
+  const f = fixture(t); const before = (await f.service.account(f.accountId)).rules;
+  for (const [duration, days] of [['day', 1], ['week', 7], ['month', 30]]) {
+    const start = Date.now(); const { rules } = await f.service.pauseDaily(f.accountId, duration);
+    assert.ok(rules.dailyPausedUntil >= start + days * 86400000 && rules.dailyPausedUntil <= Date.now() + days * 86400000);
+    assert.equal(rules.daily, false); assert.equal(rules.hour, before.hour); assert.equal(rules.timezone, before.timezone);
+  }
+  await f.service.pauseDaily(f.accountId, 'indefinite');
+  assert.equal((await f.service.account(f.accountId)).rules.dailyPausedUntil, -1);
+  // Saving unrelated advanced settings must not accidentally clear the pause.
+  const { dailyPausedUntil, ...oldClientRules } = (await f.service.account(f.accountId)).rules;
+  await f.service.saveRules(f.accountId, { ...oldClientRules, days: 120 });
+  assert.equal((await f.service.account(f.accountId)).rules.dailyPausedUntil, -1);
+  await f.service.saveRules(f.accountId, { ...oldClientRules, dailyPausedUntil: 0, days: 180 });
+  assert.equal((await f.service.account(f.accountId)).rules.dailyPausedUntil, -1, 'A stale settings form must not resume the routine');
+  await f.service.pauseDaily(f.accountId, 'resume');
+  assert.equal((await f.service.account(f.accountId)).rules.dailyPausedUntil, 0);
+  assert.equal((await f.service.account(f.accountId)).rules.daily, false);
+  await assert.rejects(f.service.pauseDaily(f.accountId, 'forever-ish'), /Choose/);
+  await assert.rejects(f.service.pauseDaily('another-account', 'day'), /Connect Gmail/);
+  assert.equal(f.writes.length, 0);
+});
+
+test('scheduler skips paused accounts without claiming the day, then resumes after expiry and still runs once', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-20T12:00:00Z') });
+  const f = fixture(t);
+  f.store.run("INSERT INTO account_access(account_key,tier) VALUES(?,'paid')", createHash('sha256').update(f.accountId).digest('hex'));
+  await f.service.saveRules(f.accountId, { ...DEFAULT_RULES, daily: true, hour: 0, timezone: 'UTC' });
+  await f.service.pauseDaily(f.accountId, 'day');
+  // A fresh service must observe the database pause, not process-local state.
+  const restarted = new InboxService(f.store, f.service.crypto, {}, f.service.clientFactory);
+  await restarted.daily(); assert.equal(f.reads.length, 0); assert.equal(f.writes.length, 0);
+  assert.equal(f.store.get('SELECT last_day FROM accounts').last_day, null);
+  t.mock.timers.tick(86400000 + 1);
+  await restarted.daily(); assert.equal(f.writes.length, 2);
+  await restarted.daily(); assert.equal(f.writes.length, 2);
+  assert.equal(f.store.get('SELECT last_day FROM accounts').last_day, '2026-10-21');
+});
+
+test('indefinite daily pause survives elapsed time until explicit resume', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-20T12:00:00Z') });
+  const f = fixture(t);
+  f.store.run("INSERT INTO account_access(account_key,tier) VALUES(?,'paid')", createHash('sha256').update(f.accountId).digest('hex'));
+  await f.service.saveRules(f.accountId, { ...DEFAULT_RULES, daily: true, hour: 0, timezone: 'UTC' });
+  await f.service.pauseDaily(f.accountId, 'indefinite'); t.mock.timers.tick(100 * 86400000);
+  await f.service.daily(); assert.equal(f.writes.length, 0); assert.equal(f.reads.length, 0);
+  await f.service.pauseDaily(f.accountId, 'resume'); await f.service.daily(); assert.equal(f.writes.length, 2);
+});
 test('next batch token is stored server-side and scoped to the owning account', async t => {
   const f = fixture(t, { pagination: true }); const plan = await f.service.scan(f.accountId);
   assert.equal(plan.moreAvailable, true); assert.equal(plan.nextPageToken, undefined);

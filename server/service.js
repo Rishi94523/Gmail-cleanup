@@ -1,6 +1,6 @@
 import { accessFor, requirePaid } from './access.js';
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_RULES, validateRules, gmailQuery, headersOf, senderAddress, protectedReason, changesFor, undoChanges, dailyKey } from './rules.js';
+import { DEFAULT_RULES, validateRules, gmailQuery, headersOf, senderAddress, protectedReason, changesFor, undoChanges, dailyKey, dailyIsPaused } from './rules.js';
 import { gmailClient, metadata, mapLimit, classify } from './gmail.js';
 import { unsubscribeUrl, postUnsubscribe } from './security.js';
 import { preferences, runAgent } from './agent.js';
@@ -30,14 +30,16 @@ export class InboxService {
   }
   async saveRules(id, input) {
     if (input.daily) await requirePaid(this, id);
-    const existingAgent = (await this.account(id)).rules.agent;
+    const existingRules = (await this.account(id)).rules;
+    const existingAgent = existingRules.agent;
     const agent = input.agent ? { ...existingAgent, ...input.agent } : existingAgent;
-    const rules = { ...validateRules(input), aiConsentProvider: input.aiConsentProvider || '', ...(agent ? { agent: preferences(agent) } : {}) };
+    const rules = { ...validateRules({ ...input, dailyPausedUntil: existingRules.dailyPausedUntil ?? 0 }), aiConsentProvider: input.aiConsentProvider || '', ...(agent ? { agent: preferences(agent) } : {}) };
     if ((rules.agent?.enabled || rules.aiEnabled) && !this.config.aiKey) throw new Error(missingAIKey(this.config));
     if (rules.agent?.enabled && rules.agent.consentProvider !== (this.config.aiProvider || 'nebius')) throw new Error('Confirm AI processing for the selected provider in Preferences.');
     if (rules.aiEnabled && rules.aiConsentProvider !== (this.config.aiProvider || 'nebius')) throw new Error('Confirm AI processing for the selected provider before enabling advanced AI review.');
     await this.store.transaction(async tx => {
-      await tx.run('UPDATE accounts SET rules=? WHERE id=?', JSON.stringify(rules), id);
+      const updated = await tx.run('UPDATE accounts SET rules=? WHERE id=? AND rules=?', JSON.stringify(rules), id, JSON.stringify(existingRules));
+      if (!updated.changes) throw new Error('Settings changed in another session. Reload before saving.');
       await tx.run("UPDATE plans SET status='expired' WHERE account_id=? AND status='ready'", id);
       // Discovery may precede the final read/archive selection. Keep unanswered
       // setup choices aligned with that permission before showing the questions.
@@ -49,6 +51,22 @@ export class InboxService {
       }
     });
     return rules;
+  }
+  async pauseDaily(id, duration) {
+    const days = { day: 1, week: 7, month: 30 };
+    if (!['day', 'week', 'month', 'indefinite', 'resume'].includes(duration)) throw new Error('Choose one day, one week, one month, or until resumed.');
+    // This intentionally does not wait for the agent lock: changing rules makes
+    // an active daily run stop before its next email write.
+    return this.store.transaction(async tx => {
+      const row = await tx.get('SELECT rules FROM accounts WHERE id=?', id);
+      if (!row) throw new Error('Connect Gmail to continue.');
+      const rules = JSON.parse(row.rules);
+      rules.dailyPausedUntil = duration === 'resume' ? 0 : duration === 'indefinite' ? -1 : Date.now() + days[duration] * 86400000;
+      const updated = await tx.run('UPDATE accounts SET rules=? WHERE id=? AND rules=?', JSON.stringify(rules), id, row.rules);
+      if (!updated.changes) throw new Error('Settings changed in another session. Reload before changing the pause.');
+      await tx.run("UPDATE plans SET status='expired' WHERE account_id=? AND status='ready'", id);
+      return { rules };
+    });
   }
   async scan(id, mode = 'manual', nextPlanId = null) { return this.locked(id, () => this.scanUnlocked(id, mode, nextPlanId)); }
   async recordSubscriptions(id, messages) {
@@ -116,7 +134,7 @@ export class InboxService {
       for (const messageId of ids) {
         await guard();
         const freshAccount = await this.account(id);
-        if (mode === 'daily' && !freshAccount.rules.daily) throw new Error('Daily agent paused. Remaining messages were left unchanged.');
+        if (mode === 'daily' && (!freshAccount.rules.daily || dailyIsPaused(freshAccount.rules))) throw new Error('Daily agent paused. Remaining messages were left unchanged.');
         if (JSON.stringify(freshAccount.rules) !== JSON.stringify(account.rules)) throw new Error('Rules changed during cleanup. Remaining messages were left unchanged.');
         let message;
         try { message = await metadata(gmail, messageId); } catch (error) { if (error.status === 404) { skipped++; continue; } throw error; }
@@ -175,12 +193,12 @@ export class InboxService {
   }); }
   async daily() {
     for (const row of await this.store.all('SELECT id,rules,last_day FROM accounts')) {
-      const rules = JSON.parse(row.rules); if (!rules.daily || !(await accessFor(this, row.id)).dailyAllowed) continue;
+      const rules = JSON.parse(row.rules); if (!rules.daily || dailyIsPaused(rules) || !(await accessFor(this, row.id)).dailyAllowed) continue;
       const day = dailyKey(rules); if (!day || row.last_day === day) continue;
       try {
         await this.locked(row.id, async guard => {
           const latest = await this.store.get('SELECT last_day,rules FROM accounts WHERE id=?', row.id);
-          if (!latest || latest.last_day === day || !JSON.parse(latest.rules).daily) return;
+          if (!latest || latest.last_day === day || !JSON.parse(latest.rules).daily || dailyIsPaused(JSON.parse(latest.rules))) return;
           // Claim once per day; interrupted/failed mutations require manual review.
           await this.store.run('UPDATE accounts SET last_day=?,last_error=NULL WHERE id=?', day, row.id);
           if (JSON.parse(latest.rules).agent?.enabled) { await runAgent(this, row.id, guard, undefined, 'daily'); return; }
