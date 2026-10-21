@@ -4,59 +4,138 @@ import { aiConfig, chatJSON } from '../server/ai.js';
 import { ASK_PREFERENCE_TOOL } from '../server/learning.js';
 
 test('hackathon transport accepts only Nebius credentials and models', () => {
-  assert.deepEqual(aiConfig({ NEBIUS_API_KEY: 'fixture' }), { aiProvider: 'nebius', aiKey: 'fixture', aiModel: 'nvidia/Nemotron-3.5-Super-VL' });
+  assert.deepEqual(aiConfig({ NEBIUS_API_KEY: 'fixture' }), {
+    aiProvider: 'nebius',
+    aiKey: 'fixture',
+    aiModel: 'nvidia/Nemotron-3.5-Super-VL'
+  });
   assert.equal(aiConfig({ AI_API_KEY: 'unused', OPENROUTER_API_KEY: 'unused' }).aiKey, '');
   assert.throws(() => aiConfig({ AI_PROVIDER: 'openrouter' }), /Nebius.*only/);
 });
-for (const provider of ['nebius']) test(`${provider} requests use the selected endpoint, model, bearer key and JSON contract`, async () => {
-  const config = aiConfig({ AI_PROVIDER: provider, NEBIUS_API_KEY: 'nebius-fixture', OPENROUTER_API_KEY: 'router-fixture' });
-  let calls = 0;
-  const result = await chatJSON(config, [{ role: 'user', content: 'Return JSON.' }], async (url, options) => {
-    calls++;
-    assert.equal(url, 'https://api.tokenfactory.us-north1.nebius.com/v1/chat/completions');
-    assert.equal(options.headers.Authorization, `Bearer ${config.aiKey}`);
-    const body = JSON.parse(options.body); assert.equal(body.model, config.aiModel); assert.equal(body.response_format.type, 'json_object');
-    assert.equal(body.max_tokens, 50000);
-    for (const field of ['max_completion_tokens', 'chat_template_kwargs', 'reasoning', 'reasoning_effort']) assert.equal(Object.hasOwn(body, field), false);
-    assert.equal(options.redirect, 'error'); assert.ok(options.signal instanceof AbortSignal);
-    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{"action":"keep"}' } }] });
+for (const provider of ['nebius'])
+  test(`${provider} requests use the selected endpoint, model, bearer key and JSON contract`, async () => {
+    const config = aiConfig({
+      AI_PROVIDER: provider,
+      NEBIUS_API_KEY: 'nebius-fixture',
+      OPENROUTER_API_KEY: 'router-fixture'
+    });
+    let calls = 0;
+    const result = await chatJSON(config, [{ role: 'user', content: 'Return JSON.' }], async (url, options) => {
+      calls++;
+      assert.equal(url, 'https://api.tokenfactory.us-north1.nebius.com/v1/chat/completions');
+      assert.equal(options.headers.Authorization, `Bearer ${config.aiKey}`);
+      const body = JSON.parse(options.body);
+      assert.equal(body.model, config.aiModel);
+      assert.equal(body.response_format.type, 'json_object');
+      assert.equal(body.max_tokens, 50000);
+      for (const field of ['max_completion_tokens', 'chat_template_kwargs', 'reasoning', 'reasoning_effort'])
+        assert.equal(Object.hasOwn(body, field), false);
+      assert.equal(options.redirect, 'error');
+      assert.ok(options.signal instanceof AbortSignal);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{"action":"keep"}' } }] });
+    });
+    assert.deepEqual(result, { action: 'keep' });
+    assert.equal(calls, 1);
   });
-  assert.deepEqual(result, { action: 'keep' }); assert.equal(calls, 1);
-});
 test('provider errors never leak raw bodies or keys and never fallback to another provider', async () => {
-  const config = aiConfig({ AI_PROVIDER: 'nebius', NEBIUS_API_KEY: 'secret-fixture-value' }); let calls = 0;
-  await assert.rejects(chatJSON(config, [], async () => { calls++; return Response.json({ error: 'secret-fixture-value' }, { status: 401 }); }), error => /Nebius.*401/.test(error.message) && !error.message.includes('secret-fixture-value'));
+  const config = aiConfig({ AI_PROVIDER: 'nebius', NEBIUS_API_KEY: 'secret-fixture-value' });
+  let calls = 0;
+  await assert.rejects(
+    chatJSON(config, [], async () => {
+      calls++;
+      return Response.json({ error: 'secret-fixture-value' }, { status: 401 });
+    }),
+    error => /Nebius.*401/.test(error.message) && !error.message.includes('secret-fixture-value')
+  );
   assert.equal(calls, 1);
-  await assert.rejects(chatJSON(config, [], async () => { throw new Error('secret-fixture-value'); }), error => !error.message.includes('secret-fixture-value'));
+  await assert.rejects(
+    chatJSON(config, [], async () => {
+      throw new Error('secret-fixture-value');
+    }),
+    error => !error.message.includes('secret-fixture-value')
+  );
 });
-for (const provider of ['nebius']) test(`${provider} preference tool calls use 50,000 output tokens and retain default reasoning`, async () => {
-  const config = aiConfig({ AI_PROVIDER: provider, NEBIUS_API_KEY: 'fixture', OPENROUTER_API_KEY: 'fixture' });
-  const args = { category: 'product_announcements', question: 'How should I handle product announcements?', reason: 'Preference unknown.' };
-  const result = await chatJSON(config, [], async (_url, options) => {
-    const body = JSON.parse(options.body);
-    assert.equal(body.max_tokens, 50000);
-    for (const field of ['max_completion_tokens', 'chat_template_kwargs', 'reasoning', 'reasoning_effort']) assert.equal(Object.hasOwn(body, field), false);
-    assert.deepEqual(body.tools, [ASK_PREFERENCE_TOOL]);
-    assert.equal(body.tool_choice, 'auto');
-    return Response.json({ choices: [{ finish_reason: 'tool_calls', message: { tool_calls: [{ function: { name: 'ask_preference', arguments: JSON.stringify(args) } }] } }] });
-  }, [ASK_PREFERENCE_TOOL]);
-  assert.deepEqual(result, { requestPreference: args });
-});
+for (const provider of ['nebius'])
+  test(`${provider} preference tool calls use 50,000 output tokens and retain default reasoning`, async () => {
+    const config = aiConfig({ AI_PROVIDER: provider, NEBIUS_API_KEY: 'fixture', OPENROUTER_API_KEY: 'fixture' });
+    const args = {
+      category: 'product_announcements',
+      question: 'How should I handle product announcements?',
+      reason: 'Preference unknown.'
+    };
+    const result = await chatJSON(
+      config,
+      [],
+      async (_url, options) => {
+        const body = JSON.parse(options.body);
+        assert.equal(body.max_tokens, 50000);
+        for (const field of ['max_completion_tokens', 'chat_template_kwargs', 'reasoning', 'reasoning_effort'])
+          assert.equal(Object.hasOwn(body, field), false);
+        assert.deepEqual(body.tools, [ASK_PREFERENCE_TOOL]);
+        assert.equal(body.tool_choice, 'auto');
+        return Response.json({
+          choices: [
+            {
+              finish_reason: 'tool_calls',
+              message: { tool_calls: [{ function: { name: 'ask_preference', arguments: JSON.stringify(args) } }] }
+            }
+          ]
+        });
+      },
+      [ASK_PREFERENCE_TOOL]
+    );
+    assert.deepEqual(result, { requestPreference: args });
+  });
 test('missing selected key does not send requests; malformed and truncated output cannot become decisions', async () => {
   let called = false;
-  await assert.rejects(chatJSON(aiConfig({ AI_PROVIDER: 'nebius', AI_API_KEY: 'router-fixture' }), [], async () => { called = true; }), /NEBIUS_API_KEY/);
+  await assert.rejects(
+    chatJSON(aiConfig({ AI_PROVIDER: 'nebius', AI_API_KEY: 'router-fixture' }), [], async () => {
+      called = true;
+    }),
+    /NEBIUS_API_KEY/
+  );
   assert.equal(called, false);
   const config = aiConfig({ NEBIUS_API_KEY: 'fixture', AI_PROVIDER: 'nebius' });
-  for (const choice of [{ finish_reason: 'length', message: { content: '{"action":"read"}' } }, { finish_reason: 'stop', message: { content: 'not JSON' } }, { finish_reason: 'stop', message: { content: '[]' } }]) {
-    await assert.rejects(chatJSON(config, [], async () => Response.json({ choices: [choice] })), error => choice.finish_reason === 'length' ? error.publicCode === 'AI_TRUNCATED' : error.publicCode === 'AI_INVALID_OUTPUT');
+  for (const choice of [
+    { finish_reason: 'length', message: { content: '{"action":"read"}' } },
+    { finish_reason: 'stop', message: { content: 'not JSON' } },
+    { finish_reason: 'stop', message: { content: '[]' } }
+  ]) {
+    await assert.rejects(
+      chatJSON(config, [], async () => Response.json({ choices: [choice] })),
+      error =>
+        choice.finish_reason === 'length'
+          ? error.publicCode === 'AI_TRUNCATED'
+          : error.publicCode === 'AI_INVALID_OUTPUT'
+    );
   }
 });
 
 test('AI telemetry records durations and reported cache hits without prompts or model output', async () => {
-  const records = []; const originalInfo = console.info; console.info = line => records.push(JSON.parse(line));
+  const records = [];
+  const originalInfo = console.info;
+  console.info = line => records.push(JSON.parse(line));
   try {
-    await chatJSON(aiConfig({ AI_PROVIDER: 'nebius', NEBIUS_API_KEY: 'private-fixture-key' }), [{ role: 'user', content: 'PRIVATE_PROMPT_CANARY' }], async () => Response.json({ usage: { prompt_tokens: 1200, completion_tokens: 70, prompt_tokens_details: { cached_tokens: 1024 }, completion_tokens_details: { reasoning_tokens: 60 } }, choices: [{ finish_reason: 'stop', message: { content: '{"private_response_canary":true}' } }] }));
-    assert.equal(records.length, 1); assert.equal(records[0].cachedPromptTokens, 1024); assert.equal(records[0].reasoningTokens, 60);
-    assert.ok(records[0].elapsedMs >= 0); assert.doesNotMatch(JSON.stringify(records), /PRIVATE_PROMPT_CANARY|private_response_canary|private-fixture-key/);
-  } finally { console.info = originalInfo; }
+    await chatJSON(
+      aiConfig({ AI_PROVIDER: 'nebius', NEBIUS_API_KEY: 'private-fixture-key' }),
+      [{ role: 'user', content: 'PRIVATE_PROMPT_CANARY' }],
+      async () =>
+        Response.json({
+          usage: {
+            prompt_tokens: 1200,
+            completion_tokens: 70,
+            prompt_tokens_details: { cached_tokens: 1024 },
+            completion_tokens_details: { reasoning_tokens: 60 }
+          },
+          choices: [{ finish_reason: 'stop', message: { content: '{"private_response_canary":true}' } }]
+        })
+    );
+    assert.equal(records.length, 1);
+    assert.equal(records[0].cachedPromptTokens, 1024);
+    assert.equal(records[0].reasoningTokens, 60);
+    assert.ok(records[0].elapsedMs >= 0);
+    assert.doesNotMatch(JSON.stringify(records), /PRIVATE_PROMPT_CANARY|private_response_canary|private-fixture-key/);
+  } finally {
+    console.info = originalInfo;
+  }
 });

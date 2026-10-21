@@ -13,7 +13,11 @@ test('AI failure codes remain diagnosable without exposing provider errors to cu
 });
 
 test('historical system errors are safe to display while ordinary guidance is preserved', () => {
-  for (const text of ['OpenRouter failed (401)', 'Configure NEBIUS_API_KEY', 'Nebius Token Factory reached its response limit']) {
+  for (const text of [
+    'OpenRouter failed (401)',
+    'Configure NEBIUS_API_KEY',
+    'Nebius Token Factory reached its response limit'
+  ]) {
     assert.doesNotMatch(customerMessage(text), /OpenRouter|Nebius|API_KEY|response limit|401/);
   }
   assert.equal(customerMessage('Choose an action for this topic.'), 'Choose an action for this topic.');

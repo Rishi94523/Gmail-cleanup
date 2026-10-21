@@ -32,7 +32,13 @@ export function openStore(directory = 'data') {
     CREATE TABLE IF NOT EXISTS free_email_usage (account_key TEXT NOT NULL, message_key TEXT NOT NULL, PRIMARY KEY(account_key,message_key));
     CREATE TABLE IF NOT EXISTS trial_samples (account_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
   `);
-  if (!db.prepare('PRAGMA table_info(subscriptions)').all().some(column => column.name === 'payload')) db.exec('ALTER TABLE subscriptions ADD COLUMN payload TEXT');
+  if (
+    !db
+      .prepare('PRAGMA table_info(subscriptions)')
+      .all()
+      .some(column => column.name === 'payload')
+  )
+    db.exec('ALTER TABLE subscriptions ADD COLUMN payload TEXT');
   const direct = {
     get: (sql, ...args) => db.prepare(sql).get(...args),
     all: (sql, ...args) => db.prepare(sql).all(...args),
@@ -41,7 +47,10 @@ export function openStore(directory = 'data') {
   // One connection is shared by every request. While an async transaction is
   // open, other callers wait so their statements are not swept into it.
   let active = null;
-  const outside = method => (sql, ...args) => active ? active.then(() => outside(method)(sql, ...args)) : direct[method](sql, ...args);
+  const outside =
+    method =>
+    (sql, ...args) =>
+      active ? active.then(() => outside(method)(sql, ...args)) : direct[method](sql, ...args);
   return {
     kind: 'sqlite',
     db,
@@ -51,12 +60,24 @@ export function openStore(directory = 'data') {
     close: () => db.close(),
     async transaction(fn) {
       while (active) await active;
-      let release; active = new Promise(resolve => { release = resolve; });
+      let release;
+      active = new Promise(resolve => {
+        release = resolve;
+      });
       try {
         db.exec('BEGIN IMMEDIATE');
-        try { const result = await fn(direct); db.exec('COMMIT'); return result; }
-        catch (error) { db.exec('ROLLBACK'); throw error; }
-      } finally { active = null; release(); }
+        try {
+          const result = await fn(direct);
+          db.exec('COMMIT');
+          return result;
+        } catch (error) {
+          db.exec('ROLLBACK');
+          throw error;
+        }
+      } finally {
+        active = null;
+        release();
+      }
     }
   };
 }

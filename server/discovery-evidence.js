@@ -9,8 +9,14 @@ const patterns = {
   social_notifications: /\b(liked|mentioned|mention|follow\w*|comment\w*|notification\w*|connection|social)\b/i,
   event_invitations: /\b(event\w*|webinar\w*|invitation\w*|invited|conference\w*|workshop\w*)\b/i,
   surveys_feedback: /\b(survey\w*|feedback|review your|rate your|opinion\w*)\b/i,
-  cold_outreach: /\b(partnership|business proposal|quick question|introducing myself|grow your|sales pitch|outreach|collaborat\w*)\b/i
+  cold_outreach:
+    /\b(partnership|business proposal|quick question|introducing myself|grow your|sales pitch|outreach|collaborat\w*)\b/i
 };
 export function discoveryEvidence(sample) {
-  return Object.fromEntries(Object.entries(patterns).map(([category, pattern]) => [category, sample.filter(m => pattern.test(`${m.sender || ''} ${m.subject || ''} ${m.listId || ''}`)).map(m => m.id)]));
+  return Object.fromEntries(
+    Object.entries(patterns).map(([category, pattern]) => [
+      category,
+      sample.filter(m => pattern.test(`${m.sender || ''} ${m.subject || ''} ${m.listId || ''}`)).map(m => m.id)
+    ])
+  );
 }

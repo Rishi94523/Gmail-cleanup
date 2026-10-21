@@ -1,0 +1,7 @@
+node_modules/
+web/dist/
+data/
+package-lock.json
+*.md
+*.html
+db/migrations/

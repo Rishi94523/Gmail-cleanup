@@ -15,7 +15,9 @@ test('job questions need career evidence; a generic LinkedIn notification is not
 });
 
 test('career evidence supports a broad job preference without making it universal', () => {
-  const evidence = discoveryEvidence([{ id: 'job', sender: 'jobs@linkedin.com', subject: 'Software engineer roles for you' }]);
+  const evidence = discoveryEvidence([
+    { id: 'job', sender: 'jobs@linkedin.com', subject: 'Software engineer roles for you' }
+  ]);
   assert.deepEqual(evidence.job_opportunities, ['job']);
   assert.deepEqual(evidence.newsletters, []);
   assert.deepEqual(discoveryEvidence([]).job_opportunities, []);

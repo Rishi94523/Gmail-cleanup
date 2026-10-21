@@ -9,5 +9,7 @@ export async function schedulerAuthorized(header, config, verify = verifyIdentit
   try {
     const identity = await verify(header.slice(7), new URL(config.appUrl).origin);
     return identity?.email_verified === true && identity.email === config.schedulerAccount;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }

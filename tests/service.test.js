@@ -10,79 +10,170 @@ import { DEFAULT_RULES } from '../server/rules.js';
 import { InboxService } from '../server/service.js';
 
 function fixture(t, options = {}) {
-  const directory = mkdtempSync(join(tmpdir(), 'inboxclean-test-')); const store = openStore(directory); const crypto = encryption(randomBytes(32).toString('base64'));
-  t.after(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
-  const accountId = 'owner@example.com'; const rules = { ...DEFAULT_RULES, markRead: true, ...options.rules };
-  store.run('INSERT INTO accounts(id,email,tokens,rules,created) VALUES(?,?,?,?,?)', accountId, accountId, crypto.seal({ refresh_token: 'fixture' }), JSON.stringify(rules), Date.now());
-  const messages = new Map(['one', 'two'].map(id => [id, { id, internalDate: String(Date.now() - 150 * 86400000), labelIds: ['INBOX', 'UNREAD', 'CATEGORY_PROMOTIONS'], payload: { headers: [{ name: 'From', value: 'shop@example.com' }, { name: 'Subject', value: 'Weekend offers' }] } }]));
-  const writes = []; const reads = []; let failWrite = false;
+  const directory = mkdtempSync(join(tmpdir(), 'inboxclean-test-'));
+  const store = openStore(directory);
+  const crypto = encryption(randomBytes(32).toString('base64'));
+  t.after(() => {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const accountId = 'owner@example.com';
+  const rules = { ...DEFAULT_RULES, markRead: true, ...options.rules };
+  store.run(
+    'INSERT INTO accounts(id,email,tokens,rules,created) VALUES(?,?,?,?,?)',
+    accountId,
+    accountId,
+    crypto.seal({ refresh_token: 'fixture' }),
+    JSON.stringify(rules),
+    Date.now()
+  );
+  const messages = new Map(
+    ['one', 'two'].map(id => [
+      id,
+      {
+        id,
+        internalDate: String(Date.now() - 150 * 86400000),
+        labelIds: ['INBOX', 'UNREAD', 'CATEGORY_PROMOTIONS'],
+        payload: {
+          headers: [
+            { name: 'From', value: 'shop@example.com' },
+            { name: 'Subject', value: 'Weekend offers' }
+          ]
+        }
+      }
+    ])
+  );
+  const writes = [];
+  const reads = [];
+  let failWrite = false;
   const client = async (path, body) => {
     reads.push(path);
-    if (path.startsWith('messages?')) return { messages: [...messages.values()].filter(m => m.labelIds.includes('INBOX')).map(m => ({ id: m.id })), ...(options.pagination ? { nextPageToken: 'next-token' } : {}) };
+    if (path.startsWith('messages?'))
+      return {
+        messages: [...messages.values()].filter(m => m.labelIds.includes('INBOX')).map(m => ({ id: m.id })),
+        ...(options.pagination ? { nextPageToken: 'next-token' } : {})
+      };
     if (path === 'labels') return { labels: [{ id: 'CLEANED', name: 'Cleaned by agent' }] };
-    const id = path.split('/')[1]?.split('?')[0]; const message = messages.get(id);
-    if (!message) { const error = new Error('Not found'); error.status = 404; throw error; }
+    const id = path.split('/')[1]?.split('?')[0];
+    const message = messages.get(id);
+    if (!message) {
+      const error = new Error('Not found');
+      error.status = 404;
+      throw error;
+    }
     if (path.endsWith('/modify')) {
       writes.push({ id, body: structuredClone(body) });
-      message.labelIds = [...new Set([...message.labelIds.filter(l => !body.removeLabelIds.includes(l)), ...body.addLabelIds])];
+      message.labelIds = [
+        ...new Set([...message.labelIds.filter(l => !body.removeLabelIds.includes(l)), ...body.addLabelIds])
+      ];
       if (failWrite) throw new Error('Provider timed out after applying the change.');
     }
     return structuredClone(message);
   };
   const service = new InboxService(store, crypto, {}, () => client);
-  return { store, service, accountId, messages, writes, reads, failWrites(value) { failWrite = value; } };
+  return {
+    store,
+    service,
+    accountId,
+    messages,
+    writes,
+    reads,
+    failWrites(value) {
+      failWrite = value;
+    }
+  };
 }
 test('scan is read-only; approval changes exactly selected messages; duplicate approval is rejected; undo preserves other labels', async t => {
-  const f = fixture(t); const plan = await f.service.scan(f.accountId);
-  assert.equal(f.writes.length, 0); assert.equal(plan.decisions.length, 2);
+  const f = fixture(t);
+  const plan = await f.service.scan(f.accountId);
+  assert.equal(f.writes.length, 0);
+  assert.equal(plan.decisions.length, 2);
   const result = await f.service.apply(f.accountId, plan.id, ['one']);
-  assert.equal(result.changed, 1); assert.deepEqual(f.messages.get('one').labelIds, ['CATEGORY_PROMOTIONS', 'CLEANED']);
+  assert.equal(result.changed, 1);
+  assert.deepEqual(f.messages.get('one').labelIds, ['CATEGORY_PROMOTIONS', 'CLEANED']);
   assert.ok(f.messages.get('two').labelIds.includes('UNREAD'));
   await assert.rejects(f.service.apply(f.accountId, plan.id, ['one']), /already been used/);
   f.messages.get('one').labelIds.push('PERSONAL_LABEL');
   await f.service.undo(f.accountId, result.id);
-  assert.deepEqual(new Set(f.messages.get('one').labelIds), new Set(['INBOX', 'UNREAD', 'CATEGORY_PROMOTIONS', 'PERSONAL_LABEL']));
+  assert.deepEqual(
+    new Set(f.messages.get('one').labelIds),
+    new Set(['INBOX', 'UNREAD', 'CATEGORY_PROMOTIONS', 'PERSONAL_LABEL'])
+  );
   await assert.rejects(f.service.undo(f.accountId, result.id), /no remaining changes/);
 });
 test('starred mail is protected even when it becomes starred after preview', async t => {
-  const f = fixture(t); const plan = await f.service.scan(f.accountId); f.messages.get('one').labelIds.push('STARRED');
-  const result = await f.service.apply(f.accountId, plan.id, ['one']); assert.equal(result.changed, 0); assert.equal(result.skipped, 1); assert.equal(f.writes.length, 0);
+  const f = fixture(t);
+  const plan = await f.service.scan(f.accountId);
+  f.messages.get('one').labelIds.push('STARRED');
+  const result = await f.service.apply(f.accountId, plan.id, ['one']);
+  assert.equal(result.changed, 0);
+  assert.equal(result.skipped, 1);
+  assert.equal(f.writes.length, 0);
 });
 test('changing rules invalidates the preview', async t => {
-  const f = fixture(t); const plan = await f.service.scan(f.accountId);
+  const f = fixture(t);
+  const plan = await f.service.scan(f.accountId);
   await f.service.saveRules(f.accountId, { ...DEFAULT_RULES, days: 180 });
-  await assert.rejects(f.service.apply(f.accountId, plan.id, ['one']), /expired/); assert.equal(f.writes.length, 0);
+  await assert.rejects(f.service.apply(f.accountId, plan.id, ['one']), /expired/);
+  assert.equal(f.writes.length, 0);
 });
 test('arbitrary IDs, plans from another account, and overlapping jobs are rejected', async t => {
-  const f = fixture(t); const plan = await f.service.scan(f.accountId);
+  const f = fixture(t);
+  const plan = await f.service.scan(f.accountId);
   await assert.rejects(f.service.apply(f.accountId, plan.id, ['foreign']), /Select messages/);
   await assert.rejects(f.service.apply('other@example.com', plan.id, ['one']), /expired/);
-  await f.service.locked(f.accountId, async () => { await assert.rejects(f.service.scan(f.accountId), /already running/); });
+  await f.service.locked(f.accountId, async () => {
+    await assert.rejects(f.service.scan(f.accountId), /already running/);
+  });
 });
 test('ambiguous provider writes are recorded, never replayed, and can be reconciled by undo', async t => {
-  const f = fixture(t); const plan = await f.service.scan(f.accountId); f.failWrites(true);
+  const f = fixture(t);
+  const plan = await f.service.scan(f.accountId);
+  f.failWrites(true);
   await assert.rejects(f.service.apply(f.accountId, plan.id, ['one', 'two']), /review activity/);
-  const run = f.store.get('SELECT * FROM runs'); const change = f.store.get('SELECT * FROM changes');
-  assert.equal(run.status, 'needs_review'); assert.equal(change.status, 'uncertain'); assert.equal(f.writes.length, 1);
-  await assert.rejects(f.service.apply(f.accountId, plan.id, ['one']), /already been used/); assert.equal(f.writes.length, 1);
-  f.failWrites(false); await f.service.undo(f.accountId, run.id); assert.ok(f.messages.get('one').labelIds.includes('UNREAD'));
+  const run = f.store.get('SELECT * FROM runs');
+  const change = f.store.get('SELECT * FROM changes');
+  assert.equal(run.status, 'needs_review');
+  assert.equal(change.status, 'uncertain');
+  assert.equal(f.writes.length, 1);
+  await assert.rejects(f.service.apply(f.accountId, plan.id, ['one']), /already been used/);
+  assert.equal(f.writes.length, 1);
+  f.failWrites(false);
+  await f.service.undo(f.accountId, run.id);
+  assert.ok(f.messages.get('one').labelIds.includes('UNREAD'));
 });
 test('daily agent runs once per account-local day and only after explicit enabling', async t => {
   const f = fixture(t);
-  f.store.run("INSERT INTO account_access(account_key,tier) VALUES(?,'paid')", createHash('sha256').update(f.accountId).digest('hex'));
-  await f.service.daily(); assert.equal(f.writes.length, 0);
+  f.store.run(
+    "INSERT INTO account_access(account_key,tier) VALUES(?,'paid')",
+    createHash('sha256').update(f.accountId).digest('hex')
+  );
+  await f.service.daily();
+  assert.equal(f.writes.length, 0);
   await f.service.saveRules(f.accountId, { ...DEFAULT_RULES, daily: true, hour: 0, timezone: 'UTC' });
-  await f.service.daily(); assert.equal(f.writes.length, 2);
-  await f.service.daily(); assert.equal(f.writes.length, 2);
+  await f.service.daily();
+  assert.equal(f.writes.length, 2);
+  await f.service.daily();
+  assert.equal(f.writes.length, 2);
   assert.equal(f.store.get('SELECT kind FROM runs').kind, 'daily');
 });
 
 test('daily pauses persist per account, preserve settings, validate durations, and do not enable a disabled routine', async t => {
-  const f = fixture(t); const before = (await f.service.account(f.accountId)).rules;
-  for (const [duration, days] of [['day', 1], ['week', 7], ['month', 30]]) {
-    const start = Date.now(); const { rules } = await f.service.pauseDaily(f.accountId, duration);
-    assert.ok(rules.dailyPausedUntil >= start + days * 86400000 && rules.dailyPausedUntil <= Date.now() + days * 86400000);
-    assert.equal(rules.daily, false); assert.equal(rules.hour, before.hour); assert.equal(rules.timezone, before.timezone);
+  const f = fixture(t);
+  const before = (await f.service.account(f.accountId)).rules;
+  for (const [duration, days] of [
+    ['day', 1],
+    ['week', 7],
+    ['month', 30]
+  ]) {
+    const start = Date.now();
+    const { rules } = await f.service.pauseDaily(f.accountId, duration);
+    assert.ok(
+      rules.dailyPausedUntil >= start + days * 86400000 && rules.dailyPausedUntil <= Date.now() + days * 86400000
+    );
+    assert.equal(rules.daily, false);
+    assert.equal(rules.hour, before.hour);
+    assert.equal(rules.timezone, before.timezone);
   }
   await f.service.pauseDaily(f.accountId, 'indefinite');
   assert.equal((await f.service.account(f.accountId)).rules.dailyPausedUntil, -1);
@@ -91,7 +182,11 @@ test('daily pauses persist per account, preserve settings, validate durations, a
   await f.service.saveRules(f.accountId, { ...oldClientRules, days: 120 });
   assert.equal((await f.service.account(f.accountId)).rules.dailyPausedUntil, -1);
   await f.service.saveRules(f.accountId, { ...oldClientRules, dailyPausedUntil: 0, days: 180 });
-  assert.equal((await f.service.account(f.accountId)).rules.dailyPausedUntil, -1, 'A stale settings form must not resume the routine');
+  assert.equal(
+    (await f.service.account(f.accountId)).rules.dailyPausedUntil,
+    -1,
+    'A stale settings form must not resume the routine'
+  );
   await f.service.pauseDaily(f.accountId, 'resume');
   assert.equal((await f.service.account(f.accountId)).rules.dailyPausedUntil, 0);
   assert.equal((await f.service.account(f.accountId)).rules.daily, false);
@@ -103,56 +198,138 @@ test('daily pauses persist per account, preserve settings, validate durations, a
 test('scheduler skips paused accounts without claiming the day, then resumes after expiry and still runs once', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-20T12:00:00Z') });
   const f = fixture(t);
-  f.store.run("INSERT INTO account_access(account_key,tier) VALUES(?,'paid')", createHash('sha256').update(f.accountId).digest('hex'));
+  f.store.run(
+    "INSERT INTO account_access(account_key,tier) VALUES(?,'paid')",
+    createHash('sha256').update(f.accountId).digest('hex')
+  );
   await f.service.saveRules(f.accountId, { ...DEFAULT_RULES, daily: true, hour: 0, timezone: 'UTC' });
   await f.service.pauseDaily(f.accountId, 'day');
   // A fresh service must observe the database pause, not process-local state.
   const restarted = new InboxService(f.store, f.service.crypto, {}, f.service.clientFactory);
-  await restarted.daily(); assert.equal(f.reads.length, 0); assert.equal(f.writes.length, 0);
+  await restarted.daily();
+  assert.equal(f.reads.length, 0);
+  assert.equal(f.writes.length, 0);
   assert.equal(f.store.get('SELECT last_day FROM accounts').last_day, null);
   t.mock.timers.tick(86400000 + 1);
-  await restarted.daily(); assert.equal(f.writes.length, 2);
-  await restarted.daily(); assert.equal(f.writes.length, 2);
+  await restarted.daily();
+  assert.equal(f.writes.length, 2);
+  await restarted.daily();
+  assert.equal(f.writes.length, 2);
   assert.equal(f.store.get('SELECT last_day FROM accounts').last_day, '2026-10-21');
 });
 
 test('indefinite daily pause survives elapsed time until explicit resume', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-20T12:00:00Z') });
   const f = fixture(t);
-  f.store.run("INSERT INTO account_access(account_key,tier) VALUES(?,'paid')", createHash('sha256').update(f.accountId).digest('hex'));
+  f.store.run(
+    "INSERT INTO account_access(account_key,tier) VALUES(?,'paid')",
+    createHash('sha256').update(f.accountId).digest('hex')
+  );
   await f.service.saveRules(f.accountId, { ...DEFAULT_RULES, daily: true, hour: 0, timezone: 'UTC' });
-  await f.service.pauseDaily(f.accountId, 'indefinite'); t.mock.timers.tick(100 * 86400000);
-  await f.service.daily(); assert.equal(f.writes.length, 0); assert.equal(f.reads.length, 0);
-  await f.service.pauseDaily(f.accountId, 'resume'); await f.service.daily(); assert.equal(f.writes.length, 2);
+  await f.service.pauseDaily(f.accountId, 'indefinite');
+  t.mock.timers.tick(100 * 86400000);
+  await f.service.daily();
+  assert.equal(f.writes.length, 0);
+  assert.equal(f.reads.length, 0);
+  await f.service.pauseDaily(f.accountId, 'resume');
+  await f.service.daily();
+  assert.equal(f.writes.length, 2);
 });
 test('next batch token is stored server-side and scoped to the owning account', async t => {
-  const f = fixture(t, { pagination: true }); const plan = await f.service.scan(f.accountId);
-  assert.equal(plan.moreAvailable, true); assert.equal(plan.nextPageToken, undefined);
-  await f.service.scan(f.accountId, 'manual', plan.id); assert.ok(f.reads.some(path => path.includes('pageToken=next-token')));
+  const f = fixture(t, { pagination: true });
+  const plan = await f.service.scan(f.accountId);
+  assert.equal(plan.moreAvailable, true);
+  assert.equal(plan.nextPageToken, undefined);
+  await f.service.scan(f.accountId, 'manual', plan.id);
+  assert.ok(f.reads.some(path => path.includes('pageToken=next-token')));
   await assert.rejects(f.service.scan(f.accountId, 'manual', plan.id), /expired/);
 });
 test('AI cannot be enabled without a configured provider', async t => {
-  const f = fixture(t); await assert.rejects(f.service.saveRules(f.accountId, { ...DEFAULT_RULES, aiEnabled: true }), /NEBIUS_API_KEY/);
+  const f = fixture(t);
+  await assert.rejects(f.service.saveRules(f.accountId, { ...DEFAULT_RULES, aiEnabled: true }), /NEBIUS_API_KEY/);
 });
 test('retention prunes finished previews, old agent logs, expired undo payloads and old preference history only', async t => {
-  const f = fixture(t); const now = Date.now(); const hour = 3600000; const day = 24 * hour; const other = 'other@example.com';
-  const plan = (id, status, created, account = f.accountId) => f.store.run('INSERT INTO plans(id,account_id,payload,status,created) VALUES(?,?,?,?,?)', id, account, 'sealed', status, created);
-  plan('fresh-ready', 'ready', now - 10 * 60000); plan('stale-ready', 'ready', now - 2 * hour); plan('applying', 'applying', now - 3 * day);
-  plan('recent-applied', 'applied', now - hour); plan('old-applied', 'applied', now - 2 * day); plan('old-expired', 'expired', now - 2 * day); plan('old-review', 'needs_review', now - 2 * day);
+  const f = fixture(t);
+  const now = Date.now();
+  const hour = 3600000;
+  const day = 24 * hour;
+  const other = 'other@example.com';
+  const plan = (id, status, created, account = f.accountId) =>
+    f.store.run(
+      'INSERT INTO plans(id,account_id,payload,status,created) VALUES(?,?,?,?,?)',
+      id,
+      account,
+      'sealed',
+      status,
+      created
+    );
+  plan('fresh-ready', 'ready', now - 10 * 60000);
+  plan('stale-ready', 'ready', now - 2 * hour);
+  plan('applying', 'applying', now - 3 * day);
+  plan('recent-applied', 'applied', now - hour);
+  plan('old-applied', 'applied', now - 2 * day);
+  plan('old-expired', 'expired', now - 2 * day);
+  plan('old-review', 'needs_review', now - 2 * day);
   for (let i = 0; i < 12; i++) plan(`log-${i}`, 'agent_log', now - i * hour);
   plan('other-log', 'agent_log', now - 100 * day, other);
-  const change = (id, status, created) => f.store.run("INSERT INTO changes(id,run_id,account_id,message_id,payload,status,created) VALUES(?,'run',?,?,'sealed',?,?)", id, f.accountId, `m-${id}`, status, created);
-  change('recent', 'applied', now - day); change('old', 'applied', now - 31 * day); change('old-undone', 'undone', now - 31 * day); change('old-uncertain', 'uncertain', now - 31 * day); change('old-undo-uncertain', 'undo_uncertain', now - 31 * day);
-  f.store.run("INSERT INTO preference_events(id,account_id,payload,created) VALUES('recent',?,'sealed',?),('old',?,'sealed',?)", f.accountId, now - 179 * day, f.accountId, now - 181 * day);
-  f.store.run("INSERT INTO agent_holds(account_id,message_id,scope_hash,question_id,created) VALUES(?,'held','scope',NULL,?)", f.accountId, now - 400 * day);
+  const change = (id, status, created) =>
+    f.store.run(
+      "INSERT INTO changes(id,run_id,account_id,message_id,payload,status,created) VALUES(?,'run',?,?,'sealed',?,?)",
+      id,
+      f.accountId,
+      `m-${id}`,
+      status,
+      created
+    );
+  change('recent', 'applied', now - day);
+  change('old', 'applied', now - 31 * day);
+  change('old-undone', 'undone', now - 31 * day);
+  change('old-uncertain', 'uncertain', now - 31 * day);
+  change('old-undo-uncertain', 'undo_uncertain', now - 31 * day);
+  f.store.run(
+    "INSERT INTO preference_events(id,account_id,payload,created) VALUES('recent',?,'sealed',?),('old',?,'sealed',?)",
+    f.accountId,
+    now - 179 * day,
+    f.accountId,
+    now - 181 * day
+  );
+  f.store.run(
+    "INSERT INTO agent_holds(account_id,message_id,scope_hash,question_id,created) VALUES(?,'held','scope',NULL,?)",
+    f.accountId,
+    now - 400 * day
+  );
   await f.service.prune(now);
-  assert.deepEqual(f.store.all('SELECT id FROM plans ORDER BY id').map(r => r.id), ['applying', 'fresh-ready', ...Array.from({ length: 10 }, (_, i) => `log-${i}`).sort(), 'other-log', 'recent-applied'].sort());
-  assert.deepEqual(Object.fromEntries(f.store.all('SELECT id,status,payload FROM changes').map(r => [r.id, `${r.status}:${r.payload}`])), { recent: 'applied:sealed', old: 'expired:', 'old-undone': 'expired:', 'old-uncertain': 'uncertain:sealed', 'old-undo-uncertain': 'undo_uncertain:sealed' });
-  assert.deepEqual(f.store.all('SELECT id FROM preference_events').map(r => r.id), ['recent']);
+  assert.deepEqual(
+    f.store.all('SELECT id FROM plans ORDER BY id').map(r => r.id),
+    [
+      'applying',
+      'fresh-ready',
+      ...Array.from({ length: 10 }, (_, i) => `log-${i}`).sort(),
+      'other-log',
+      'recent-applied'
+    ].sort()
+  );
+  assert.deepEqual(
+    Object.fromEntries(
+      f.store.all('SELECT id,status,payload FROM changes').map(r => [r.id, `${r.status}:${r.payload}`])
+    ),
+    {
+      recent: 'applied:sealed',
+      old: 'expired:',
+      'old-undone': 'expired:',
+      'old-uncertain': 'uncertain:sealed',
+      'old-undo-uncertain': 'undo_uncertain:sealed'
+    }
+  );
+  assert.deepEqual(
+    f.store.all('SELECT id FROM preference_events').map(r => r.id),
+    ['recent']
+  );
   assert.equal(f.store.get('SELECT count(*) AS n FROM agent_holds').n, 1);
 });
 test('a cleanup cannot be undone after the undo window', async t => {
-  const f = fixture(t); const plan = await f.service.scan(f.accountId);
+  const f = fixture(t);
+  const plan = await f.service.scan(f.accountId);
   const result = await f.service.apply(f.accountId, plan.id, ['one']);
   await f.service.prune(Date.now() + 31 * 86400000);
   await assert.rejects(f.service.undo(f.accountId, result.id), /undone for 30 days/);
