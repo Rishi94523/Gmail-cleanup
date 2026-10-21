@@ -127,6 +127,38 @@ test('agent makes decisions without per-email selection; known people/uncertaint
   await f.service.undo(f.id, result.runId);
   assert.ok(f.mails.get('noise').labelIds.includes('UNREAD'));
 });
+test('pausing or rescheduling the routine does not re-send assessed emails to the model; decision settings still do', async t => {
+  const f = fixture(t);
+  f.service.config.hackathonMode = true;
+  let calls = 0;
+  const infer = async (...args) => {
+    calls++;
+    return f.infer(...args);
+  };
+  const run = () => f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', infer));
+  const first = await run();
+  assert.ok(first.inspected > 0);
+  const firstCalls = calls;
+  assert.ok(firstCalls > 0);
+  const rules = await f.service.account(f.id).then(account => account.rules);
+  f.store.run(
+    'UPDATE accounts SET rules=? WHERE id=?',
+    JSON.stringify({ ...rules, daily: true, hour: 18, timezone: 'Europe/London' }),
+    f.id
+  );
+  await f.service.pauseDaily(f.id, 'week');
+  assert.equal((await run()).inspected, 0);
+  await f.service.pauseDaily(f.id, 'resume');
+  assert.equal((await run()).inspected, 0);
+  assert.equal(calls, firstCalls, 'Schedule changes must not trigger new model calls');
+  const current = await f.service.account(f.id).then(account => account.rules);
+  f.store.run(
+    'UPDATE accounts SET rules=? WHERE id=?',
+    JSON.stringify({ ...current, protectedSenders: ['someone@example.invalid'] }),
+    f.id
+  );
+  assert.ok((await run()).inspected > 0, 'Changing a decision setting reassesses mail');
+});
 test('agent requires saved permission and never falls back to rules when disabled', async t => {
   const f = fixture(t, { enabled: false });
   await assert.rejects(

@@ -417,6 +417,13 @@ export async function learnInbox(service, id, consent, provider) {
   return discovery;
 }
 
+// Scheduling fields decide when the routine runs, not how an email is judged.
+// Keeping them out of the assessment fingerprint stops a pause, resume or new
+// daily time from re-sending every unread email to the model.
+export function assessmentRules({ daily, dailyPausedUntil, hour, timezone, ...rules }) {
+  return rules;
+}
+
 export async function runAgent(
   service,
   id,
@@ -459,7 +466,7 @@ export async function runAgent(
   const policy = createHash('sha256')
     .update(
       JSON.stringify({
-        rules: account.rules,
+        rules: assessmentRules(account.rules),
         userContext: learnedCategories.notes,
         topicPreferences: learnedCategories.memories.map(m => ({ id: m.id, version: m.version })),
         provider: service.config.aiProvider || 'nebius',
