@@ -126,7 +126,7 @@ async function refresh(mailbox = false) {
   if (!samePlan) selected = new Set(plan?.decisions.filter(d => !d.reason).map(d => d.id) || []);
   render();
   if (mailbox && state.connected) {
-    try { const profile = await request('/api/mailbox'); $('#metric-unread').textContent = number(profile.unread); $('#unread-caption').textContent = 'Unread emails in your Primary inbox'; }
+    try { const profile = await request('/api/mailbox'); $('#metric-unread').textContent = `${number(profile.unread)}${profile.unreadCapped ? '+' : ''}`; $('#unread-caption').textContent = 'Unread emails in your Primary inbox'; }
     catch (err) { $('#unread-caption').textContent = 'Mailbox count unavailable'; error(err.message); }
   }
   if (state.connected) await loadLearning();
@@ -155,7 +155,7 @@ $('#cleanup-approval').addEventListener('click', event => {
   if (event.target.id === 'cancel-cleanup') { $('#cleanup-approval').hidden = true; approval = null; }
   if (event.target.id === 'confirm-cleanup' && approval) {
     const approved = { ...approval };
-    operation(event.target, 'Tidying your inbox…', async () => { const result = await request('/api/apply', approved); await refresh(true); toast(`${number(result.changed)} emails tidied. Undo is available in Activity.`); });
+    operation(event.target, 'Tidying your inbox…', async () => { const result = await request('/api/apply', approved); await refresh(true); toast(`${number(result.changed)} emails tidied. Undo is available in Activity for 30 days.`); });
   }
 });
 document.addEventListener('click', event => {

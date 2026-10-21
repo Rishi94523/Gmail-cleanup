@@ -26,22 +26,37 @@ export function openStore(directory = 'data') {
     CREATE INDEX IF NOT EXISTS runs_account ON runs(account_id,created);
     CREATE INDEX IF NOT EXISTS plans_account ON plans(account_id,created);
     CREATE INDEX IF NOT EXISTS changes_account ON changes(account_id,run_id);
+    CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires);
+    CREATE INDEX IF NOT EXISTS oauth_states_expiry ON oauth_states(expires);
     CREATE TABLE IF NOT EXISTS account_access (account_key TEXT PRIMARY KEY, tier TEXT NOT NULL DEFAULT 'free' CHECK(tier IN ('free','paid')), free_used INTEGER NOT NULL DEFAULT 0 CHECK(free_used BETWEEN 0 AND 100), discovery_used INTEGER NOT NULL DEFAULT 0 CHECK(discovery_used IN (0,1)));
     CREATE TABLE IF NOT EXISTS free_email_usage (account_key TEXT NOT NULL, message_key TEXT NOT NULL, PRIMARY KEY(account_key,message_key));
     CREATE TABLE IF NOT EXISTS trial_samples (account_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
   `);
   if (!db.prepare('PRAGMA table_info(subscriptions)').all().some(column => column.name === 'payload')) db.exec('ALTER TABLE subscriptions ADD COLUMN payload TEXT');
+  const direct = {
+    get: (sql, ...args) => db.prepare(sql).get(...args),
+    all: (sql, ...args) => db.prepare(sql).all(...args),
+    run: (sql, ...args) => db.prepare(sql).run(...args)
+  };
+  // One connection is shared by every request. While an async transaction is
+  // open, other callers wait so their statements are not swept into it.
+  let active = null;
+  const outside = method => (sql, ...args) => active ? active.then(() => outside(method)(sql, ...args)) : direct[method](sql, ...args);
   return {
     kind: 'sqlite',
     db,
-    get: (sql, ...args) => db.prepare(sql).get(...args),
-    all: (sql, ...args) => db.prepare(sql).all(...args),
-    run: (sql, ...args) => db.prepare(sql).run(...args),
+    get: outside('get'),
+    all: outside('all'),
+    run: outside('run'),
     close: () => db.close(),
     async transaction(fn) {
-      db.exec('BEGIN IMMEDIATE');
-      try { const result = await fn(this); db.exec('COMMIT'); return result; }
-      catch (error) { db.exec('ROLLBACK'); throw error; }
+      while (active) await active;
+      let release; active = new Promise(resolve => { release = resolve; });
+      try {
+        db.exec('BEGIN IMMEDIATE');
+        try { const result = await fn(direct); db.exec('COMMIT'); return result; }
+        catch (error) { db.exec('ROLLBACK'); throw error; }
+      } finally { active = null; release(); }
     }
   };
 }

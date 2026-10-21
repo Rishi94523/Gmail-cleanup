@@ -8,7 +8,7 @@ The same Node service serves the React landing page, workspace, OAuth callback a
 - Topic preferences and written conditions are encrypted, versioned and editable. Sender exceptions take precedence. Initial answers can authorize the initial sample; answers after cleanup starts affect future mail only.
 - Written onboarding or workspace instructions are interpreted into a preview and explicitly confirmed. The preview is encrypted, account-bound, expires after 20 minutes and checks preference versions before saving. Background notes preserve the user's words and inform discovery/cleanup without granting action permissions. Saving preferences never runs cleanup or releases held mail.
 - Cleanup fetches 20-message windows, asks for two concurrent batches of ten decisions, then rechecks permissions and labels before serial Gmail writes. A model decision cannot override protected labels or user permissions.
-- Changes are reserved before external writes and confirmed afterward. Uncertain writes are not replayed. Undo restores only labels/read state that the run changed.
+- Changes are reserved before external writes and confirmed afterward. Uncertain writes are not replayed. Undo restores only labels/read state that the run changed, for 30 days; after that the change rows keep only the message ID.
 - Uncertain topics use `ask_preference`; the email is held unchanged and the agent continues. Pending questions persist until the user answers or snoozes them.
 - Automatic unsubscribe is separately enabled and limited to verified one-click endpoints. DNS/address restrictions and signed headers prevent arbitrary network actions. There is no general browser or shell tool exposed to email content.
 
@@ -23,5 +23,7 @@ The account's rules JSON stores `dailyPausedUntil`: 0 for no pause, -1 until res
 ## Storage and observability
 
 OAuth tokens, discovery/sample context, learned preferences, example subscription subjects and cleanup deltas use AES-256-GCM encryption. Sessions and account data are scoped per user. CSRF checks protect browser writes; the scheduler uses its separate authenticated endpoint.
+
+Scheduler maintenance prunes data nothing reads again, at most hourly: cleanup previews once they expire or finish, agent decision logs beyond the latest 10 per account, change payloads past the 30-day undo window, and preference history older than 180 days. Runs, held messages, assessment markers and uncertain changes are kept because they prevent repeated processing or repeated model calls.
 
 Operational logs report durations, token/cache counts and failure statuses without email text, subjects or credentials. Schema changes live in versioned SQL migrations; validate them on an expiring Neon branch before production.

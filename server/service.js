@@ -1,11 +1,15 @@
 import { accessFor, requirePaid } from './access.js';
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_RULES, validateRules, gmailQuery, headersOf, senderAddress, protectedReason, changesFor, undoChanges, dailyKey, dailyIsPaused } from './rules.js';
+import { validateRules, gmailQuery, headersOf, senderAddress, protectedReason, changesFor, undoChanges, dailyKey, dailyIsPaused } from './rules.js';
 import { gmailClient, metadata, mapLimit, classify } from './gmail.js';
 import { unsubscribeUrl, postUnsubscribe } from './security.js';
 import { preferences, runAgent } from './agent.js';
 import { missingAIKey } from './ai.js';
 import { choicesFor } from './learning.js';
+
+export const UNDO_WINDOW = 30 * 86400000;
+export const PREFERENCE_EVENT_RETENTION = 180 * 86400000;
+export const AGENT_LOGS_KEPT = 10;
 
 export class InboxService {
   constructor(store, crypto, config, clientFactory = gmailClient) { this.store = store; this.crypto = crypto; this.config = config; this.clientFactory = clientFactory; }
@@ -162,7 +166,7 @@ export class InboxService {
     const run = await this.store.get('SELECT * FROM runs WHERE id=? AND account_id=?', runId, id);
     if (!run || !['cleanup', 'daily'].includes(run.kind)) throw new Error('Cleanup run not found.');
     const changes = await this.store.all("SELECT * FROM changes WHERE run_id=? AND account_id=? AND status IN ('applied','uncertain','undo_uncertain')", runId, id);
-    if (!changes.length) throw new Error('There are no remaining changes to undo.');
+    if (!changes.length) throw new Error('There are no remaining changes to undo. Cleanups can be undone for 30 days.');
     const gmail = this.client(await this.account(id)); let restored = 0;
     for (const row of changes) {
       await guard(); const change = this.crypto.open(row.payload);
@@ -191,6 +195,16 @@ export class InboxService {
       return { status: 'requested' };
     } catch (error) { throw new Error(`${error.message} Request status is uncertain; it will not be retried automatically.`); }
   }); }
+  // Remove only data nothing reads again. Holds, assessments and uncertain
+  // changes stay: they stop the agent from re-touching or re-billing a message.
+  async prune(now = Date.now()) {
+    // Previews can be applied for one hour; finished ones are never reopened.
+    await this.store.run("DELETE FROM plans WHERE (status='ready' AND created<?) OR (status IN ('expired','applied','needs_review') AND created<?)", now - 3600000, now - 86400000);
+    await this.store.run(`DELETE FROM plans WHERE status='agent_log' AND id NOT IN (SELECT id FROM plans p WHERE p.account_id=plans.account_id AND p.status='agent_log' ORDER BY p.created DESC LIMIT ${AGENT_LOGS_KEPT})`);
+    // Past the undo window, keep the row (message id) but drop the label payload.
+    await this.store.run("UPDATE changes SET status='expired',payload='' WHERE status IN ('applied','undone') AND created<?", now - UNDO_WINDOW);
+    await this.store.run('DELETE FROM preference_events WHERE created<?', now - PREFERENCE_EVENT_RETENTION);
+  }
   async daily() {
     for (const row of await this.store.all('SELECT id,rules,last_day FROM accounts')) {
       const rules = JSON.parse(row.rules); if (!rules.daily || dailyIsPaused(rules) || !(await accessFor(this, row.id)).dailyAllowed) continue;

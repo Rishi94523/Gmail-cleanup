@@ -3,12 +3,12 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { openPostgresStore } from './postgres-store.js';
 import { encryption, randomToken, hash } from './security.js';
 import { DEFAULT_RULES } from './rules.js';
 import { InboxService } from './service.js';
-import { jsonFetch, primaryUnreadCount } from './gmail.js';
+import { jsonFetch, primaryUnreadCount, revokeGoogleToken } from './gmail.js';
 import { learnInbox, runAgent } from './agent.js';
 import { aiConfig } from './ai.js';
 import { learningTray, answerPreference, editMemory, interpretPreference, interpretNotes, saveNotes } from './learning.js';
@@ -111,7 +111,8 @@ export async function createApp(options = {}) {
         if (req.method === 'GET' && url.pathname === '/api/agent/questions') return json(res, 200, await learningTray(service, id));
         if (req.method === 'GET' && url.pathname === '/api/mailbox') {
           const account = await service.account(id); const gmail = service.client(account);
-          return json(res, 200, { email: account.email, unread: await primaryUnreadCount(gmail), scope: 'primary' });
+          const unread = await primaryUnreadCount(gmail);
+          return json(res, 200, { email: account.email, unread: unread.count, unreadCapped: unread.capped, scope: 'primary' });
         }
         if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
         if (req.headers.origin !== origin || req.headers['x-csrf-token'] !== session.csrf || !req.headers['content-type']?.startsWith('application/json')) return json(res, 403, { error: 'Request could not be verified. Reload the app and try again.' });
@@ -151,8 +152,7 @@ export async function createApp(options = {}) {
           // Revoke server-side; if revocation fails keep the account paused so the
           // user can retry instead of falsely reporting a complete disconnect.
           await store.run('UPDATE accounts SET rules=? WHERE id=?', JSON.stringify({ ...account.rules, daily: false }), id);
-          const revoked = await fetch('https://oauth2.googleapis.com/revoke', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: account.tokens.refresh_token }), signal: AbortSignal.timeout(15000) });
-          if (!revoked.ok) throw new Error('Agent paused, but Google revocation failed. Try disconnecting again or remove app access from your Google account.');
+          await revokeGoogleToken(account.tokens.refresh_token, options.fetch);
           await store.transaction(async tx => {
             for (const table of ['changes', 'plans', 'runs', 'subscriptions', 'agent_assessments', 'agent_questions', 'preference_memories', 'preference_events', 'agent_holds', 'subscription_actions', 'agent_discoveries', 'trial_samples']) await tx.run(`DELETE FROM ${table} WHERE account_id=?`, id);
             await tx.run('DELETE FROM sessions WHERE account_id=?', id); await tx.run('DELETE FROM accounts WHERE id=?', id);
@@ -180,12 +180,15 @@ export async function createApp(options = {}) {
     } catch (error) {
       // No raw provider responses or tokens in errors/logs.
       const databaseError = /^[0-9A-Z]{5}$/.test(error.code || '') || /SQLITE|constraint|database|fetch failed|ENOENT/i.test(error.message);
-      const internal = databaseError || /Nebius|OpenRouter|API[_ -]?KEY|AI_PROVIDER|AI_MODEL|OAuth client|redirect URI|README|\.env\b|model access|provider.*changed/i.test(error.message);
+      const internal = databaseError || /Nebius|API[_ -]?KEY|AI_PROVIDER|AI_MODEL|OAuth client|redirect URI|README|\.env\b|model access|provider.*changed/i.test(error.message);
       const safe = error.publicCode ? publicFailure(error).message : internal ? 'This feature is temporarily unavailable. Please try again later.' : error.message;
-      return json(res, 400, { error: safe, ...(error.publicCode ? { code: error.publicCode } : {}) });
+      // 5xx for our own failures (500) and failed Gmail/AI calls (502), so they show up in Cloud Run error metrics.
+      const status = error.publicCode ? 502 : internal ? 500 : error.status && error.status !== 401 ? 502 : 400;
+      if (status >= 500) console.error(JSON.stringify({ event: 'request_failed', path: url?.pathname, status, code: error.publicCode || error.code || null }));
+      return json(res, status, { error: safe, ...(error.publicCode ? { code: error.publicCode } : {}) });
     }
   });
-  let ticking = false;
+  let ticking = false; let lastPrune = 0;
   const tick = async () => {
     if (!service || ticking) return { status: 'busy' };
     ticking = true;
@@ -194,6 +197,7 @@ export async function createApp(options = {}) {
       await store.run("UPDATE plans SET status='needs_review' WHERE status='applying' AND account_id NOT IN (SELECT account_id FROM locks WHERE expires>?)", Date.now());
       await service.daily();
       await store.run('DELETE FROM sessions WHERE expires<?', Date.now()); await store.run('DELETE FROM oauth_states WHERE expires<?', Date.now());
+      if (Date.now() - lastPrune >= 3600000) { await service.prune(); lastPrune = Date.now(); }
       return { status: 'completed' };
     } catch { console.error('Daily agent encountered an error; check account activity.'); return { status: 'failed' }; } finally { ticking = false; }
   };

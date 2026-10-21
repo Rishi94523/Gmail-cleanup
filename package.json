@@ -7,7 +7,8 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "build": "npm run check:web && npm run build:web && node --check server/index.js && node --check server/service.js && node --check server/postgres-store.js && node --check server/agent.js && node --check server/ai.js && node --check server/learning.js && node --check server/email-context.js && node --check server/subscription-agent.js && node --check public/app.js && node --check public/onboarding.js && node --check public/preference-answer.js",
+    "build": "npm run check:web && npm run build:web && npm run lint",
+    "lint": "eslint .",
     "ai:check": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/check-ai.mjs",
     "db:migrate": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/migrate.mjs",
     "build:web": "vite build --config web/vite.config.ts",
@@ -20,10 +21,13 @@
     "qa:agent": "node scripts/qa-agent.mjs"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0",
     "playwright": "^1.64.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"

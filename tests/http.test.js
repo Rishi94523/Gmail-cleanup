@@ -7,6 +7,8 @@ import { randomBytes } from 'node:crypto';
 import { request } from 'node:http';
 import { createApp } from '../server/index.js';
 import { DEFAULT_RULES } from '../server/rules.js';
+import { primaryUnreadCount } from '../server/gmail.js';
+import { failure } from '../server/failures.js';
 
 async function setup(t, configured = false, config = {}, options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'inboxclean-http-'));
@@ -50,8 +52,15 @@ test('mailbox count includes only unread Primary inbox messages across all resul
   app.store.run('UPDATE sessions SET account_id=?', id);
   const response = await call('/api/mailbox', { headers: { Cookie: cookie } });
   assert.equal(response.status, 200); const result = await response.json();
-  assert.equal(result.unread, 3); assert.equal(result.scope, 'primary'); assert.equal(result.messages, undefined);
+  assert.equal(result.unread, 3); assert.equal(result.unreadCapped, false); assert.equal(result.scope, 'primary'); assert.equal(result.messages, undefined);
   assert.equal(reads.length, 2);
+});
+
+test('mailbox count stops at its limit instead of paging through a large backlog', async () => {
+  let reads = 0;
+  const gmail = async path => { reads++; const page = Number(new URLSearchParams(path.split('?')[1]).get('pageToken') || 0); return { messages: Array.from({ length: 500 }, (_, i) => ({ id: `${page}-${i}` })), nextPageToken: String(page + 1) }; };
+  assert.deepEqual(await primaryUnreadCount(gmail), { count: 1000, capped: true });
+  assert.equal(reads, 2);
 });
 test('OAuth uses state and PKCE and callback rejects missing or foreign state without external calls', async t => {
   const { call } = await setup(t, true); const status = await call('/api/status'); const cookie = status.headers.get('set-cookie').split(';')[0];
@@ -73,6 +82,25 @@ test('session cookies resolve, write routes reject cross-origin or missing CSRF,
     assert.equal((await call(path, { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
     assert.equal((await call(path, { headers: { Cookie: cookie } })).status, 405);
   }
+});
+
+test('disconnect removes account data when Google already revoked the token, but keeps it when revocation fails', async t => {
+  let reply = { status: 503, body: {} }; const revocations = [];
+  const fetch = async (url, options) => { revocations.push([url, options.body.get('token')]); return new Response(JSON.stringify(reply.body), { status: reply.status }); };
+  const { call, app } = await setup(t, true, {}, { fetch }); const status = await call('/api/status'); const cookie = status.headers.get('set-cookie').split(';')[0]; const data = await status.json();
+  const id = 'owner@example.com'; app.store.run('INSERT INTO accounts(id,email,tokens,rules,created) VALUES(?,?,?,?,?)', id, id, app.service.crypto.seal({ refresh_token: 'fixture' }), JSON.stringify({ ...DEFAULT_RULES, daily: true }), Date.now());
+  app.store.run("INSERT INTO runs(id,account_id,kind,status,total,created) VALUES('run',?,'cleanup','completed',1,?)", id, Date.now());
+  app.store.run('UPDATE sessions SET account_id=?', id);
+  const disconnect = () => call('/api/disconnect', { method: 'POST', headers: { Cookie: cookie, Origin: 'http://localhost:3000', 'X-CSRF-Token': data.csrf, 'Content-Type': 'application/json' }, body: '{}' });
+  const failed = await disconnect();
+  assert.equal(failed.status, 400); assert.match((await failed.json()).error, /revocation failed/);
+  assert.equal(JSON.parse(app.store.get('SELECT rules FROM accounts WHERE id=?', id).rules).daily, false);
+  assert.equal(app.store.get('SELECT count(*) AS n FROM runs').n, 1);
+  reply = { status: 400, body: { error: 'invalid_token', error_description: 'Token expired or revoked' } };
+  const removed = await disconnect();
+  assert.equal(removed.status, 200); assert.deepEqual(await removed.json(), { success: true });
+  assert.equal(app.store.get('SELECT count(*) AS n FROM accounts').n, 0); assert.equal(app.store.get('SELECT count(*) AS n FROM runs').n, 0);
+  assert.deepEqual(revocations, [['https://oauth2.googleapis.com/revoke', 'fixture'], ['https://oauth2.googleapis.com/revoke', 'fixture']]);
 });
 
 test('production routing serves landing and dashboard together and protects free additional-cleanup endpoints', async t => {
@@ -109,4 +137,22 @@ test('verified Cloud Scheduler tick runs maintenance once and rejects a differen
   assert.equal((await call('/internal/scheduler/tick', { method: 'POST', headers: { Authorization: 'Bearer wrong-fixture' } })).status, 401);
   const result = await call('/internal/scheduler/tick', { method: 'POST', headers: { Authorization: 'Bearer authorized-fixture' } });
   assert.equal(result.status, 200); assert.equal((await result.json()).status, 'completed'); assert.equal(ticks, 1);
+});
+
+test('internal and upstream failures return 5xx with a safe message; validation errors stay 400', async t => {
+  const { call, app } = await setup(t, true); const status = await call('/api/status'); const cookie = status.headers.get('set-cookie').split(';')[0]; const data = await status.json();
+  const id = 'owner@example.com'; app.store.run('INSERT INTO accounts(id,email,tokens,rules,created) VALUES(?,?,?,?,?)', id, id, app.service.crypto.seal({ refresh_token: 'fixture' }), JSON.stringify(DEFAULT_RULES), Date.now());
+  app.store.run('UPDATE sessions SET account_id=?', id);
+  const post = () => call('/api/rules', { method: 'POST', headers: { Cookie: cookie, Origin: 'http://localhost:3000', 'X-CSRF-Token': data.csrf, 'Content-Type': 'application/json' }, body: '{}' });
+  const cases = [
+    [new Error('SQLITE_BUSY: database is locked'), 500, /temporarily unavailable/],
+    [Object.assign(new Error('Provider request failed (503). Try again later.'), { status: 503 }), 502, /Provider request failed/],
+    [failure('AI_UNAVAILABLE', 'Nebius Token Factory could not be reached.'), 502, /could not finish this step/],
+    [Object.assign(new Error('Gmail connection expired. Please reconnect.'), { status: 401 }), 400, /reconnect/],
+    [new Error('Choose a valid daily hour.'), 400, /valid daily hour/]
+  ];
+  for (const [error, expected, message] of cases) {
+    app.service.saveRules = async () => { throw error; };
+    const response = await post(); assert.equal(response.status, expected); assert.match((await response.json()).error, message);
+  }
 });

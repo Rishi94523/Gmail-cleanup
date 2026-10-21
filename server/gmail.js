@@ -2,9 +2,11 @@ import { headersOf, senderAddress, protectedReason } from './rules.js';
 import { chatJSON, missingAIKey } from './ai.js';
 import { PRIMARY_INBOX_QUERY } from './inbox-scope.js';
 
-export async function primaryUnreadCount(gmail) {
+export const UNREAD_COUNT_LIMIT = 1000;
+export async function primaryUnreadCount(gmail, limit = UNREAD_COUNT_LIMIT) {
   // Gmail's resultSizeEstimate is approximate. Count matching IDs across pages
-  // without downloading subjects, bodies, or attachments.
+  // without downloading subjects, bodies, or attachments. Stop at the limit so a
+  // very large backlog does not cost one Gmail request per 500 messages.
   const ids = new Set(); const pages = new Set(); let pageToken;
   do {
     const page = await gmail(`messages?${new URLSearchParams({ q: PRIMARY_INBOX_QUERY, maxResults: '500', fields: 'messages(id),nextPageToken', ...(pageToken ? { pageToken } : {}) })}`);
@@ -12,8 +14,18 @@ export async function primaryUnreadCount(gmail) {
     pageToken = page.nextPageToken;
     if (pageToken && pages.has(pageToken)) throw new Error('Primary unread count could not finish. Please try again.');
     if (pageToken) pages.add(pageToken);
-  } while (pageToken);
-  return ids.size;
+  } while (pageToken && ids.size < limit);
+  return { count: Math.min(ids.size, limit), capped: Boolean(pageToken) || ids.size > limit };
+}
+// Google answers 400 invalid_token when the user already removed access or the
+// token expired; access is gone either way, so local data can still be removed.
+export async function revokeGoogleToken(token, fetcher = fetch) {
+  if (!token) return;
+  const response = await fetcher('https://oauth2.googleapis.com/revoke', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token }), signal: AbortSignal.timeout(15000) });
+  if (response.ok) return;
+  const result = await response.json().catch(() => ({}));
+  if (response.status === 400 && result.error === 'invalid_token') return;
+  throw new Error('Agent paused, but Google revocation failed. Try disconnecting again or remove app access from your Google account.');
 }
 
 export async function jsonFetch(url, options = {}) {

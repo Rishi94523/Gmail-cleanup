@@ -134,3 +134,27 @@ test('next batch token is stored server-side and scoped to the owning account', 
 test('AI cannot be enabled without a configured provider', async t => {
   const f = fixture(t); await assert.rejects(f.service.saveRules(f.accountId, { ...DEFAULT_RULES, aiEnabled: true }), /NEBIUS_API_KEY/);
 });
+test('retention prunes finished previews, old agent logs, expired undo payloads and old preference history only', async t => {
+  const f = fixture(t); const now = Date.now(); const hour = 3600000; const day = 24 * hour; const other = 'other@example.com';
+  const plan = (id, status, created, account = f.accountId) => f.store.run('INSERT INTO plans(id,account_id,payload,status,created) VALUES(?,?,?,?,?)', id, account, 'sealed', status, created);
+  plan('fresh-ready', 'ready', now - 10 * 60000); plan('stale-ready', 'ready', now - 2 * hour); plan('applying', 'applying', now - 3 * day);
+  plan('recent-applied', 'applied', now - hour); plan('old-applied', 'applied', now - 2 * day); plan('old-expired', 'expired', now - 2 * day); plan('old-review', 'needs_review', now - 2 * day);
+  for (let i = 0; i < 12; i++) plan(`log-${i}`, 'agent_log', now - i * hour);
+  plan('other-log', 'agent_log', now - 100 * day, other);
+  const change = (id, status, created) => f.store.run("INSERT INTO changes(id,run_id,account_id,message_id,payload,status,created) VALUES(?,'run',?,?,'sealed',?,?)", id, f.accountId, `m-${id}`, status, created);
+  change('recent', 'applied', now - day); change('old', 'applied', now - 31 * day); change('old-undone', 'undone', now - 31 * day); change('old-uncertain', 'uncertain', now - 31 * day); change('old-undo-uncertain', 'undo_uncertain', now - 31 * day);
+  f.store.run("INSERT INTO preference_events(id,account_id,payload,created) VALUES('recent',?,'sealed',?),('old',?,'sealed',?)", f.accountId, now - 179 * day, f.accountId, now - 181 * day);
+  f.store.run("INSERT INTO agent_holds(account_id,message_id,scope_hash,question_id,created) VALUES(?,'held','scope',NULL,?)", f.accountId, now - 400 * day);
+  await f.service.prune(now);
+  assert.deepEqual(f.store.all('SELECT id FROM plans ORDER BY id').map(r => r.id), ['applying', 'fresh-ready', ...Array.from({ length: 10 }, (_, i) => `log-${i}`).sort(), 'other-log', 'recent-applied'].sort());
+  assert.deepEqual(Object.fromEntries(f.store.all('SELECT id,status,payload FROM changes').map(r => [r.id, `${r.status}:${r.payload}`])), { recent: 'applied:sealed', old: 'expired:', 'old-undone': 'expired:', 'old-uncertain': 'uncertain:sealed', 'old-undo-uncertain': 'undo_uncertain:sealed' });
+  assert.deepEqual(f.store.all('SELECT id FROM preference_events').map(r => r.id), ['recent']);
+  assert.equal(f.store.get('SELECT count(*) AS n FROM agent_holds').n, 1);
+});
+test('a cleanup cannot be undone after the undo window', async t => {
+  const f = fixture(t); const plan = await f.service.scan(f.accountId);
+  const result = await f.service.apply(f.accountId, plan.id, ['one']);
+  await f.service.prune(Date.now() + 31 * 86400000);
+  await assert.rejects(f.service.undo(f.accountId, result.id), /undone for 30 days/);
+  assert.ok(!f.messages.get('one').labelIds.includes('INBOX'));
+});
