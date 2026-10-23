@@ -4,6 +4,8 @@ The same Node service serves the React landing page, workspace, OAuth callback a
 
 ## Agent flow
 
+- Gmail category labels are hints rather than a veto on a Primary search result. If another category label is present, discovery and cleanup confirm the exact message with a Primary/unread/inbox search scoped to its Message-ID; ambiguous or missing identities stay unchanged. Cleanup repeats the scope check before writing and still requires an unchanged Gmail history ID. The scope-check version is part of the assessment fingerprint, so skips from an older scope rule can be assessed again without deleting audit history.
+
 - Discovery freezes the initial Primary sample before cleanup. It sends header metadata in groups of 25, with two model requests at a time. Evidence-backed broad topics are deduplicated before questions are saved.
 - Topic preferences and written conditions are encrypted, versioned and editable. Sender exceptions take precedence. Initial answers can authorize the initial sample; answers after cleanup starts affect future mail only.
 - Written onboarding or workspace instructions are interpreted into a preview and explicitly confirmed. The preview is encrypted, account-bound, expires after 20 minutes and checks preference versions before saving. Background notes preserve the user's words and inform discovery/cleanup without granting action permissions. Saving preferences never runs cleanup or releases held mail.

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { headersOf, senderAddress } from './rules.js';
 import { unsubscribeUrl, postUnsubscribe } from './security.js';
 import { scopeFor } from './learning.js';
-import { outsidePrimary } from './inbox-scope.js';
+import { confirmPrimaryInbox } from './inbox-scope.js';
 
 export function transactional(message) {
   const h = headersOf(message);
@@ -79,7 +79,7 @@ export async function automaticUnsubscribe(service, id, message, guard, expected
   const fresh = await gmail(`messages/${encodeURIComponent(message.id)}?format=metadata`);
   if (
     !fresh.labelIds?.includes('INBOX') ||
-    outsidePrimary(fresh) ||
+    !(await confirmPrimaryInbox(gmail, fresh)) ||
     fresh.historyId !== message.historyId ||
     scopeFor(fresh).scopeHash !== scope.scopeHash ||
     transactional(fresh)

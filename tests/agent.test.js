@@ -18,6 +18,7 @@ import {
   modelDecisionBatch
 } from '../server/agent.js';
 import { accessFor, restartTrial, reserveFreeEmail, trialSample } from '../server/access.js';
+import { confirmPrimaryInbox } from '../server/inbox-scope.js';
 
 function fixture(t, patch = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'inboxclean-agent-'));
@@ -678,7 +679,7 @@ test('discovery fetches headers only and never sends bodies or snippets to the m
     for (const path of reads) {
       const params = new URLSearchParams(path.split('?')[1]);
       assert.equal(params.get('format'), 'metadata');
-      assert.deepEqual(params.getAll('metadataHeaders').sort(), ['Date', 'From', 'List-ID', 'Subject']);
+      assert.deepEqual(params.getAll('metadataHeaders').sort(), ['Date', 'From', 'List-ID', 'Message-ID', 'Subject']);
     }
     assert.equal(f.store.get('SELECT count(*) AS n FROM agent_questions').n, 0);
   } finally {
@@ -935,7 +936,7 @@ test('discovery excludes other tabs even when a legacy saved sample contains the
   }
 });
 
-test('other Gmail tabs never reach AI classification or mailbox changes', async t => {
+test('messages without confirmed Primary membership never reach AI classification or mailbox changes', async t => {
   const f = fixture(t, { keepPeople: false });
   f.mails.get('noise').labelIds.push('CATEGORY_PERSONAL');
   for (const [id, tab] of [
@@ -955,6 +956,112 @@ test('other Gmail tabs never reach AI classification or mailbox changes', async 
   assert.deepEqual(classified, ['noise@example.invalid']);
   assert.equal(f.writes.length, 1);
   for (const id of ['person', 'uncertain', 'starred']) assert.ok(f.mails.get(id).labelIds.includes('UNREAD'));
+});
+
+test('Primary search confirmation lets an Updates-labelled product announcement follow its saved read preference', async t => {
+  const f = fixture(t, { keepPeople: false, topicActions: true });
+  const message = f.mails.get('noise');
+  f.mails.clear();
+  f.mails.set('noise', message);
+  message.labelIds.push('CATEGORY_UPDATES');
+  message.payload.headers.push({ name: 'Message-ID', value: '<product-update@example.invalid>' });
+  f.store.run(
+    'INSERT INTO preference_memories(id,account_id,scope_hash,payload,updated) VALUES(?,?,?,?,?)',
+    'product',
+    f.id,
+    'category:product_announcements',
+    f.crypto.seal({
+      scope: { kind: 'category', category: 'product_announcements', scopeHash: 'category:product_announcements' },
+      action: 'read',
+      minAgeDays: 0,
+      effectiveFrom: 0
+    }),
+    Date.now()
+  );
+  const originalClient = f.service.client.bind(f.service);
+  let confirmations = 0;
+  let classified = 0;
+  f.service.client = account => {
+    const base = originalClient(account);
+    return async (path, ...args) => {
+      if (path.startsWith('messages?') && new URLSearchParams(path.split('?')[1]).get('q')?.includes('rfc822msgid:')) {
+        confirmations++;
+        assert.equal(
+          new URLSearchParams(path.split('?')[1]).get('q'),
+          'in:inbox category:primary is:unread rfc822msgid:product-update@example.invalid'
+        );
+        return { messages: [{ id: 'noise' }] };
+      }
+      return base(path, ...args);
+    };
+  };
+  const result = await f.service.locked(f.id, guard =>
+    runAgent(f.service, f.id, guard, undefined, 'manual', async () => {
+      classified++;
+      return {
+        action: 'read',
+        confidence: 1,
+        reason: 'Saved product announcement preference',
+        preferenceCategory: 'product_announcements',
+        categoryConfidence: 1
+      };
+    })
+  );
+  assert.equal(classified, 1);
+  assert.equal(confirmations, 2);
+  assert.equal(result.changed, 1);
+  assert.ok(message.labelIds.includes('INBOX'));
+  assert.equal(message.labelIds.includes('UNREAD'), false);
+});
+
+test('an Updates-labelled message removed from Primary while AI decides is not modified', async t => {
+  const f = fixture(t, { keepPeople: false });
+  const message = f.mails.get('noise');
+  f.mails.clear();
+  f.mails.set('noise', message);
+  message.labelIds.push('CATEGORY_UPDATES');
+  message.payload.headers.push({ name: 'Message-ID', value: '<moved@example.invalid>' });
+  const originalClient = f.service.client.bind(f.service);
+  let confirmations = 0;
+  f.service.client = account => {
+    const base = originalClient(account);
+    return async (path, ...args) => {
+      if (path.startsWith('messages?') && new URLSearchParams(path.split('?')[1]).get('q')?.includes('rfc822msgid:'))
+        return { messages: ++confirmations === 1 ? [{ id: 'noise' }] : [] };
+      return base(path, ...args);
+    };
+  };
+  await f.service.locked(f.id, guard =>
+    runAgent(f.service, f.id, guard, undefined, 'manual', async () => ({
+      action: 'read',
+      confidence: 1,
+      reason: 'Low priority'
+    }))
+  );
+  assert.equal(confirmations, 2);
+  assert.equal(f.writes.length, 0);
+  assert.ok(message.labelIds.includes('UNREAD'));
+});
+
+test('Primary confirmation requires the exact Gmail message and rejects unsafe or absent Message-ID headers', async () => {
+  const message = {
+    id: 'wanted',
+    labelIds: ['INBOX', 'UNREAD', 'CATEGORY_UPDATES'],
+    payload: { headers: [{ name: 'Message-ID', value: '<shared@example.invalid>' }] }
+  };
+  assert.equal(await confirmPrimaryInbox(async () => ({ messages: [{ id: 'another-message' }] }), message), false);
+  for (const value of ['', '<id@example.invalid> OR in:anywhere', '<id@example.invalid)']) {
+    let calls = 0;
+    message.payload.headers[0].value = value;
+    assert.equal(
+      await confirmPrimaryInbox(async () => {
+        calls++;
+        return {};
+      }, message),
+      false
+    );
+    assert.equal(calls, 0);
+  }
 });
 
 test('a message that moves out of Primary after classification is left unchanged', async t => {

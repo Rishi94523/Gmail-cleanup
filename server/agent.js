@@ -3,7 +3,7 @@ import { failure } from './failures.js';
 import { mapLimit } from './gmail.js';
 import { emailTiming, clockContext, sensitiveNoticeKind } from './email-context.js';
 import { discoveryEvidence } from './discovery-evidence.js';
-import { PRIMARY_INBOX_QUERY, outsidePrimary } from './inbox-scope.js';
+import { PRIMARY_INBOX_QUERY, PRIMARY_SCOPE_VERSION, outsidePrimary, confirmPrimaryInbox } from './inbox-scope.js';
 import { accessFor, requirePaid, trialSample, reserveDiscovery, reserveFreeEmail } from './access.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { headersOf, senderAddress, dailyIsPaused } from './rules.js';
@@ -91,9 +91,14 @@ export function emailText(payload) {
           .trim()
   ).slice(0, 12000);
 }
-export function agentProtection(message, rules, { allowOlderNotices = false, now = Date.now() } = {}) {
+export function agentProtection(
+  message,
+  rules,
+  { allowOlderNotices = false, now = Date.now(), primaryVerified = false } = {}
+) {
   if (!message.labelIds?.includes('INBOX')) return 'Already outside the inbox';
-  if (outsidePrimary(message)) return 'Already sorted into another Gmail tab; left unchanged';
+  if (outsidePrimary(message, { primaryVerified }))
+    return 'Outside Primary or could not confirm its current tab; left unchanged';
   if (message.labelIds.some(label => ['STARRED', 'IMPORTANT', 'DRAFT', 'SENT'].includes(label)))
     return 'Protected Gmail label';
   const sender = senderAddress(headersOf(message).from);
@@ -255,13 +260,13 @@ export async function learnInbox(service, id, consent, provider) {
     let message;
     try {
       message = await gmail(
-        `messages/${encodeURIComponent(messageId)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=List-ID`
+        `messages/${encodeURIComponent(messageId)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=List-ID&metadataHeaders=Message-ID`
       );
     } catch (error) {
       if (error.status === 404) return null;
       throw error;
     }
-    if (outsidePrimary(message) || !message.labelIds?.includes('INBOX')) return null;
+    if (!(await confirmPrimaryInbox(gmail, message))) return null;
     source.set(messageId, message);
     const h = headersOf(message);
     return {
@@ -466,6 +471,7 @@ export async function runAgent(
   const policy = createHash('sha256')
     .update(
       JSON.stringify({
+        primaryScope: PRIMARY_SCOPE_VERSION,
         rules: assessmentRules(account.rules),
         userContext: learnedCategories.notes,
         topicPreferences: learnedCategories.memories.map(m => ({ id: m.id, version: m.version })),
@@ -569,7 +575,8 @@ export async function runAgent(
       }
       const h = headersOf(message);
       const sender = senderAddress(h.from);
-      let protect = agentProtection(message, account.rules, { allowOlderNotices: true });
+      const primaryVerified = await confirmPrimaryInbox(gmail, message);
+      let protect = agentProtection(message, account.rules, { allowOlderNotices: true, primaryVerified });
       if (!protect && p.keepPeople && (await knownPerson(gmail, sender, people)))
         protect = 'You have emailed this person before';
       const scope = scopeFor(message);
@@ -850,7 +857,10 @@ export async function runAgent(
         if (JSON.stringify(current.rules) !== JSON.stringify(account.rules))
           throw new Error('Preferences changed. Agent stopped.');
         if (
-          agentProtection(fresh, current.rules, { allowOlderNotices: Boolean(approvedOlderNotice) }) ||
+          agentProtection(fresh, current.rules, {
+            allowOlderNotices: Boolean(approvedOlderNotice),
+            primaryVerified: await confirmPrimaryInbox(gmail, fresh)
+          }) ||
           !fresh.labelIds?.includes('UNREAD') ||
           fresh.historyId !== message.historyId
         ) {
