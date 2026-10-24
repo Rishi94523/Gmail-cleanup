@@ -128,7 +128,7 @@ try {
       ];
       tray.questions = [];
       tray.questionsTotal = 0;
-      json = { status: 'saved' };
+      json = { status: 'saved', cleanup: { status: 'completed', inspected: 2, changed: 1, waiting: 0 } };
     } else if (path === '/api/agent/memories/edit') {
       const change = route.request().postDataJSON();
       Object.assign(tray.memories[0], {
@@ -191,6 +191,8 @@ try {
   assert.equal(tray.memories.length, 0);
   await page.getByRole('button', { name: /Save this preference/ }).click();
   await page.waitForFunction(() => document.querySelector('#question-count').textContent === '0');
+  assert.match(await page.locator('#toast').textContent(), /2 held emails checked.*1 tidied/);
+  assert.equal(ran, false, 'Answer follow-up must not start a general inbox run');
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();
   assert.equal(await page.locator('#learned-preferences [name=minAgeDays]').inputValue(), '90');
   await page.locator('.preference-row > summary').click();

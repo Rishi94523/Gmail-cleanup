@@ -114,6 +114,40 @@ export async function holdEmail(service, id, messageId, scope, questionId = null
     Date.now()
   );
 }
+
+export async function answeredHeldIds(service, id, questionIds, messageIds) {
+  if (
+    !Array.isArray(questionIds) ||
+    !questionIds.length ||
+    questionIds.length > 8 ||
+    questionIds.some(q => typeof q !== 'string' || !q)
+  )
+    return [];
+  if (
+    messageIds !== undefined &&
+    (!Array.isArray(messageIds) || !messageIds.length || messageIds.some(m => typeof m !== 'string' || !m))
+  )
+    return [];
+  const questions = await service.store.all(
+    `SELECT id,scope_hash FROM agent_questions WHERE account_id=? AND status='answered' AND id IN (${questionIds.map(() => '?').join(',')})`,
+    id,
+    ...questionIds
+  );
+  if (!questions.length) return [];
+  const scopes = [...new Set(questions.map(q => q.scope_hash))];
+  const rows = await service.store.all(
+    `SELECT h.message_id FROM agent_holds h WHERE h.account_id=? AND (h.question_id IN (${questions.map(() => '?').join(',')}) OR h.scope_hash IN (${scopes.map(() => '?').join(',')}))
+    AND NOT EXISTS (SELECT 1 FROM changes c WHERE c.account_id=h.account_id AND c.message_id=h.message_id AND c.status IN ('uncertain','undo_uncertain'))
+    AND NOT EXISTS (SELECT 1 FROM agent_questions q WHERE q.account_id=h.account_id AND q.status='pending' AND (q.id=h.question_id OR q.scope_hash=h.scope_hash))
+    ${messageIds ? `AND h.message_id IN (${messageIds.map(() => '?').join(',')})` : ''}
+    ORDER BY h.created,h.message_id`,
+    id,
+    ...questions.map(q => q.id),
+    ...scopes,
+    ...(messageIds || [])
+  );
+  return rows.map(r => r.message_id);
+}
 function preferenceAge(value, scope, fallback = 0) {
   const days = value ?? fallback;
   const floor = categoryScope(scope.category)?.minimumAgeDays || 0;
@@ -295,9 +329,9 @@ export async function interpretPreference(service, id, input) {
   const minAgeDays = preferenceAge(result.minAgeDays, question.scope, question.minAgeDays || 0);
   return { supported: true, action: result.action, minAgeDays, instructions: input.text.trim() };
 }
-export async function answerPreference(service, id, input) {
-  return service.locked(id, async () =>
-    service.store.transaction(async tx => {
+export async function answerPreference(service, id, input, afterSave) {
+  return service.locked(id, async guard => {
+    const result = await service.store.transaction(async tx => {
       const row = await tx.get(
         "SELECT * FROM agent_questions WHERE id=? AND account_id=? AND status='pending'",
         input.questionId,
@@ -358,9 +392,10 @@ export async function answerPreference(service, id, input) {
         id
       );
       await recordEvent(tx, service, id, { kind: 'answer', questionId: row.id, memory });
-      return { status: 'saved', applies: memory.applies };
-    })
-  );
+      return { status: 'saved', applies: memory.applies, answeredQuestionIds: [row.id] };
+    });
+    return result.status === 'saved' && afterSave ? afterSave(result, guard) : result;
+  });
 }
 export async function editMemory(service, id, input) {
   return service.locked(id, async () =>
@@ -489,7 +524,7 @@ export async function interpretNotes(service, id, input) {
   };
 }
 
-export async function saveNotes(service, id, input) {
+export async function saveNotes(service, id, input, afterSave) {
   let proposal;
   try {
     proposal = service.crypto.open(input.token);
@@ -498,12 +533,13 @@ export async function saveNotes(service, id, input) {
   }
   if (proposal?.kind !== 'preference_notes' || proposal.accountId !== id || proposal.expires < Date.now())
     throw new Error('This preview expired. Review your preference again.');
-  return service.locked(id, async () =>
-    service.store.transaction(async tx => {
+  return service.locked(id, async guard => {
+    const result = await service.store.transaction(async tx => {
       const snapshot = await preferenceSnapshot(service, id, tx);
       if (snapshot.fingerprint !== proposal.fingerprint)
         throw new Error('Your preferences changed. Review your instructions again before saving.');
       const now = Date.now();
+      const answeredQuestionIds = [];
       for (const topic of proposal.topics) {
         const memory = {
           ...topic,
@@ -519,7 +555,12 @@ export async function saveNotes(service, id, input) {
           service.crypto.seal(memory),
           now
         );
-        // Resolve the topic question, but do not release or replay held emails.
+        const resolved = await tx.all(
+          "SELECT id FROM agent_questions WHERE account_id=? AND scope_hash=? AND status='pending'",
+          id,
+          topic.scope.scopeHash
+        );
+        answeredQuestionIds.push(...resolved.map(q => q.id));
         await tx.run(
           "UPDATE agent_questions SET status='answered',version=version+1,updated=? WHERE account_id=? AND scope_hash=? AND status='pending'",
           now,
@@ -552,8 +593,10 @@ export async function saveNotes(service, id, input) {
       }
       return {
         status: 'saved',
-        applies: 'all_eligible_messages'
+        applies: 'all_eligible_messages',
+        answeredQuestionIds
       };
-    })
-  );
+    });
+    return afterSave ? afterSave(result, guard) : result;
+  });
 }

@@ -1,6 +1,6 @@
 import { customerMessage } from '/customer-message.js';
 import { createOnboarding } from '/onboarding.js';
-import { writePreference, writeNotes } from '/preference-answer.js';
+import { writePreference, writeNotes, answerCleanupMessage } from '/preference-answer.js';
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const escape = value =>
@@ -148,7 +148,12 @@ function renderRules() {
 }
 function renderActivity() {
   const renderRun = run => {
-    const titles = { cleanup: 'Inbox cleanup', daily: 'Daily tidy', unsubscribe: 'Unsubscribe request' };
+    const titles = {
+      held_cleanup: 'Answered question cleanup',
+      cleanup: 'Inbox cleanup',
+      daily: 'Daily tidy',
+      unsubscribe: 'Unsubscribe request'
+    };
     const summaries = {
       running: 'In progress. Refresh to check completion.',
       completed: `${number(run.changed)} emails tidied · ${number(run.skipped)} kept after rechecking`,
@@ -779,7 +784,7 @@ function renderLearning() {
     ? learningState.questions
         .map(
           q =>
-            `<form class="question-card" data-question="${escape(q.id)}"><p class="eyebrow">${escape(q.scope.label || q.scope.listId || q.scope.sender)}</p><h2>${escape(q.question)}</h2><p>${escape(q.reason)}</p><p class="question-context">Example: ${escape(q.sample.subject)}. Left unchanged.</p>${q.options.map(o => `<label class="question-option"><input type="radio" name="answer" value="${escape(o.id)}" required><span>${escape(o.label)}</span></label>`).join('')}<button class="primary" type="submit">Save my answer →</button><p>${q.initial ? 'Saved for this topic in your Primary sample and future cleanups.' : 'Saved for older and newer mail. Your next manual or daily cleanup applies this preference.'}</p></form>`
+            `<form class="question-card" data-question="${escape(q.id)}"><p class="eyebrow">${escape(q.scope.label || q.scope.listId || q.scope.sender)}</p><h2>${escape(q.question)}</h2><p>${escape(q.reason)}</p><p class="question-context">Example: ${escape(q.sample.subject)}. Left unchanged.</p>${q.options.map(o => `<label class="question-option"><input type="radio" name="answer" value="${escape(o.id)}" required><span>${escape(o.label)}</span></label>`).join('')}<button class="primary" type="submit">Save my answer →</button><p>${q.initial ? 'Saved for this topic in your Primary sample and future cleanups.' : 'Saved for older and newer mail. Answering immediately rechecks only emails held for this question.'}</p></form>`
         )
         .join('')
     : empty(
@@ -807,7 +812,10 @@ function renderLearning() {
         writePreference(custom, {
           question,
           request,
-          onSaved: () => loadLearning(),
+          onSaved: async result => {
+            await refresh(true);
+            toast(answerCleanupMessage(result));
+          },
           onCancel: () => {
             custom.remove();
             hidden.forEach(element => {
@@ -878,10 +886,10 @@ $('#preference-pagination').addEventListener('click', event => {
 function mountPreferenceComposer() {
   writeNotes($('#preference-composer'), {
     request,
-    onSaved: async () => {
-      await loadLearning();
+    onSaved: async result => {
+      await refresh(true);
       mountPreferenceComposer();
-      toast('Preferences saved for future cleanups.');
+      toast(answerCleanupMessage(result));
     }
   });
 }
@@ -892,16 +900,20 @@ $('#questions-tray').addEventListener('submit', event => {
   if (!form) return;
   const question = learningState.questions.find(q => q.id === form.dataset.question);
   const option = new FormData(form).get('answer');
-  operation(form.querySelector('button'), 'Saving…', async () => {
-    await request('/api/agent/questions/answer', { questionId: question.id, version: question.version, option });
-    await loadLearning();
+  operation(form.querySelector('button'), 'Saving & checking held emails…', async () => {
+    const result = await request('/api/agent/questions/answer', {
+      questionId: question.id,
+      version: question.version,
+      option
+    });
+    await refresh(true);
     if (question.initial && !learningState.questions.length && state.rules.agent?.enabled) showPage('overview');
     toast(
       option === 'later'
         ? 'Question saved for tomorrow. Emails left unchanged.'
         : question.initial
           ? 'Setup answer saved. Start your free cleanup from Overview when ready.'
-          : 'Preference saved. Your next cleanup can reconsider earlier mail.'
+          : answerCleanupMessage(result)
     );
   });
 });

@@ -1,4 +1,5 @@
 import { publicFailure } from './failures.js';
+import { cleanAnsweredHolds } from './held-cleanup.js';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve, dirname, sep } from 'node:path';
@@ -304,12 +305,23 @@ export async function createApp(options = {}) {
           return json(res, 403, { error: 'Request could not be verified. Reload the app and try again.' });
         const input = await body(req);
         if (url.pathname === '/api/agent/questions/answer')
-          return json(res, 200, await answerPreference(service, id, input));
+          return json(
+            res,
+            200,
+            await answerPreference(service, id, input, (answer, guard) =>
+              cleanAnsweredHolds(service, id, answer, guard)
+            )
+          );
         if (url.pathname === '/api/agent/questions/interpret')
           return json(res, 200, await service.locked(id, () => interpretPreference(service, id, input)));
         if (url.pathname === '/api/agent/preferences/interpret')
           return json(res, 200, await service.locked(id, () => interpretNotes(service, id, input)));
-        if (url.pathname === '/api/agent/preferences/save') return json(res, 200, await saveNotes(service, id, input));
+        if (url.pathname === '/api/agent/preferences/save')
+          return json(
+            res,
+            200,
+            await saveNotes(service, id, input, (answer, guard) => cleanAnsweredHolds(service, id, answer, guard))
+          );
         if (url.pathname === '/api/agent/memories/edit') return json(res, 200, await editMemory(service, id, input));
         if (url.pathname === '/api/agent/learn')
           return json(res, 200, await service.locked(id, () => learnInbox(service, id, input.consent, input.provider)));

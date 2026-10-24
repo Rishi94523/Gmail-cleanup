@@ -15,7 +15,8 @@ import {
   memoryFor,
   categoryContext,
   askPreference,
-  holdEmail
+  holdEmail,
+  answeredHeldIds
 } from './learning.js';
 import {
   PREFERENCE_CATEGORIES,
@@ -463,7 +464,8 @@ export async function runAgent(
   emit = () => {},
   mode = 'manual',
   infer = modelDecision,
-  unsubscribe = automaticUnsubscribe
+  unsubscribe = automaticUnsubscribe,
+  options = {}
 ) {
   const account = await service.account(id);
   const p = preferences(account.rules.agent);
@@ -476,9 +478,11 @@ export async function runAgent(
     await requirePaid(service, id);
     if (!account.rules.daily || dailyIsPaused(account.rules)) throw new Error('Daily routine is paused.');
   }
-  if (access.tier === 'free' && !access.remaining)
+  if (mode !== 'held' && access.tier === 'free' && !access.remaining)
     throw new Error('Your free 100-email cleanup is complete. Additional and daily cleanups require a paid plan.');
   const perRunLimit = access.tier === 'hackathon' ? 100 : 500;
+  if (mode === 'held' && (!Array.isArray(options.messageIds) || options.messageIds.length > 100))
+    throw new Error('Choose a valid held-email batch.');
   const firstHackathonRun =
     access.tier === 'hackathon' &&
     !(
@@ -517,7 +521,7 @@ export async function runAgent(
     "INSERT INTO runs(id,account_id,kind,status,total,created) VALUES(?,?,?,'running',0,?)",
     runId,
     id,
-    mode === 'daily' ? 'daily' : 'cleanup',
+    mode === 'daily' ? 'daily' : mode === 'held' ? 'held_cleanup' : 'cleanup',
     Date.now()
   );
   const send = event => {
@@ -530,7 +534,12 @@ export async function runAgent(
     "INSERT INTO plans(id,account_id,payload,status,created) VALUES(?,?,?,'agent_log',?)",
     logId,
     id,
-    service.crypto.seal({ runId, applies: 'all_eligible_messages', decisions }),
+    service.crypto.seal({
+      runId,
+      applies: 'all_eligible_messages',
+      ...(mode === 'held' ? { answeredQuestionIds: options.questionIds } : {}),
+      decisions
+    }),
     Date.now()
   );
   try {
@@ -538,13 +547,29 @@ export async function runAgent(
     // Gather IDs before changing labels so Gmail pagination cannot skip shifted results.
     const ids = [];
     // Saved preferences apply to the whole eligible backlog in every run mode.
-    // Only unanswered/snoozed questions remain held; saving a preference itself
-    // still never performs Gmail writes.
+    // Only unanswered/snoozed questions remain held. Answer-triggered runs use
+    // their exact held-ID snapshot instead of searching the rest of the inbox.
     const unresolvedHoldFilter =
       " AND EXISTS (SELECT 1 FROM agent_questions q WHERE q.account_id=agent_holds.account_id AND q.status='pending' AND (q.id=agent_holds.question_id OR q.scope_hash=agent_holds.scope_hash))";
     let pageToken;
     let pages = 0;
-    if (access.tier === 'free' || firstHackathonRun) {
+    if (mode === 'held') {
+      const held = await answeredHeldIds(service, id, options.questionIds, options.messageIds);
+      if (access.tier === 'free') {
+        const row = await service.store.get('SELECT payload FROM trial_samples WHERE account_id=?', id);
+        const sample = new Set(row ? service.crypto.open(row.payload).ids : []);
+        const usage = await service.store.all(
+          'SELECT message_key FROM free_email_usage WHERE account_key=?',
+          createHash('sha256').update(id).digest('hex')
+        );
+        const charged = new Set(usage.map(r => r.message_key));
+        ids.push(
+          ...held.filter(
+            messageId => sample.has(messageId) && charged.has(createHash('sha256').update(messageId).digest('hex'))
+          )
+        );
+      } else ids.push(...held);
+    } else if (access.tier === 'free' || firstHackathonRun) {
       const sample = await trialSample(service, id, gmail);
       const excluded = access.recovering
         ? await service.store.all('SELECT message_id FROM changes WHERE account_id=?', id)
@@ -672,6 +697,7 @@ export async function runAgent(
       await guard();
       if (
         infer !== modelDecision &&
+        mode !== 'held' &&
         access.tier === 'free' &&
         !(await reserveFreeEmail(service, id, messageId, access.recovering))
       )
@@ -693,7 +719,11 @@ export async function runAgent(
         });
         const reserved = [];
         for (const candidate of window) {
-          if (access.tier === 'free' && !(await reserveFreeEmail(service, id, candidate, access.recovering)))
+          if (
+            mode !== 'held' &&
+            access.tier === 'free' &&
+            !(await reserveFreeEmail(service, id, candidate, access.recovering))
+          )
             prepared.set(candidate, null);
           else reserved.push(candidate);
         }
@@ -917,17 +947,29 @@ export async function runAgent(
         /uncertain|question|waiting|no saved action|before your.*answer/i.test(result.reason)
       )
         waiting++;
-      await service.store.run(
-        'INSERT INTO agent_assessments(account_id,message_id,policy_hash,created) VALUES(?,?,?,?) ON CONFLICT DO NOTHING',
-        id,
-        messageId,
-        policy,
-        Date.now()
-      );
+      // An age-only deferral must remain eligible when the message gets older,
+      // even though the saved preference/version has not changed.
+      const ageDeferred =
+        result.action === 'keep' &&
+        timing.ageDays !== null &&
+        ((minimumAge > 0 && timing.ageDays < minimumAge) || (sensitive && timing.ageDays < 30));
+      if (!ageDeferred)
+        await service.store.run(
+          'INSERT INTO agent_assessments(account_id,message_id,policy_hash,created) VALUES(?,?,?,?) ON CONFLICT DO NOTHING',
+          id,
+          messageId,
+          policy,
+          Date.now()
+        );
       decisions.push({ id: messageId, sender, subject: h.subject || '(No subject)', ...result });
       await service.store.run(
         'UPDATE plans SET payload=? WHERE id=?',
-        service.crypto.seal({ runId, applies: 'all_eligible_messages', decisions }),
+        service.crypto.seal({
+          runId,
+          applies: 'all_eligible_messages',
+          ...(mode === 'held' ? { answeredQuestionIds: options.questionIds } : {}),
+          decisions
+        }),
         logId
       );
       await service.store.run('UPDATE runs SET changed=?,skipped=? WHERE id=?', changed, kept, runId);

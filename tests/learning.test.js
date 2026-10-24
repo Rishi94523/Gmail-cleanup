@@ -24,6 +24,8 @@ import {
 import { unsubscribeEligible, automaticUnsubscribe } from '../server/subscription-agent.js';
 import { chatJSON } from '../server/ai.js';
 import { categoryScope, matchingException, validateExceptions } from '../server/preference-categories.js';
+import { cleanAnsweredHolds } from '../server/held-cleanup.js';
+import { reserveFreeEmail, accessFor } from '../server/access.js';
 
 function mail(id, subject = 'Product updates', listId = 'marketing.product.example') {
   const headers = {
@@ -613,6 +615,236 @@ test('cleanup applies saved preferences to old resolved holds without an extra a
   assert.ok(f.messages.get('one').labelIds.includes('INBOX'));
   const log = f.crypto.open(f.store.get("SELECT payload FROM plans WHERE status='agent_log'").payload);
   assert.equal(log.applies, 'all_eligible_messages');
+});
+
+test('saving an answer immediately cleans only that question held emails under the same account lock', async t => {
+  const f = fixture(t);
+  f.service.config.hackathonMode = true;
+  await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
+  await askPreference(f.service, f.id, f.messages.get('two'), f.rules.agent, { ...args, category: 'newsletters' });
+  const questions = (await learningTray(f.service, f.id)).questions;
+  const question = questions.find(q => q.scope.category === 'product_announcements');
+  let runs = 0;
+  const result = await answerPreference(
+    f.service,
+    f.id,
+    { questionId: question.id, version: question.version, option: 'read' },
+    async (answer, guard) => {
+      assert.equal(f.store.get('SELECT status FROM agent_questions WHERE id=?', question.id).status, 'answered');
+      await assert.rejects(
+        f.service.locked(f.id, async () => {}),
+        /already running/
+      );
+      return cleanAnsweredHolds(f.service, f.id, answer, guard, async (...params) => {
+        runs++;
+        assert.equal(params[4], 'held');
+        assert.deepEqual(params[7].messageIds, ['one']);
+        params[5] = async () => ({
+          action: 'read',
+          confidence: 1,
+          reason: 'Saved topic',
+          preferenceCategory: 'product_announcements',
+          categoryConfidence: 1
+        });
+        return runAgent(...params);
+      });
+    }
+  );
+  assert.equal(runs, 1);
+  assert.equal(result.cleanup.status, 'completed');
+  assert.equal(result.cleanup.changed, 1);
+  assert.equal(f.messages.get('one').labelIds.includes('UNREAD'), false);
+  assert.equal(f.messages.get('two').labelIds.includes('UNREAD'), true);
+  assert.equal(f.store.get('SELECT kind FROM runs').kind, 'held_cleanup');
+  await assert.rejects(
+    answerPreference(f.service, f.id, { questionId: question.id, version: question.version, option: 'read' }),
+    /already answered/
+  );
+  assert.equal(f.writes(), 1);
+});
+
+test('confirmed typed instructions immediately recheck holds only when they resolve a pending topic question', async t => {
+  const f = fixture(t);
+  f.service.config.hackathonMode = true;
+  await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json({
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: {
+            content: JSON.stringify({
+              supported: true,
+              topics: [{ category: 'product_announcements', action: 'read', minAgeDays: 0 }],
+              context: false
+            })
+          }
+        }
+      ]
+    });
+  try {
+    const proposal = await interpretNotes(f.service, f.id, { text: 'Mark product announcements as read.' });
+    const result = await saveNotes(f.service, f.id, { token: proposal.token }, (answer, guard) =>
+      cleanAnsweredHolds(f.service, f.id, answer, guard, async (...params) => {
+        params[5] = async () => ({
+          action: 'read',
+          confidence: 1,
+          reason: 'Saved typed answer',
+          preferenceCategory: 'product_announcements',
+          categoryConfidence: 1
+        });
+        return runAgent(...params);
+      })
+    );
+    assert.equal(result.answeredQuestionIds.length, 1);
+    assert.equal(result.cleanup.changed, 1);
+    assert.equal(f.messages.get('two').labelIds.includes('UNREAD'), true);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('an answer stays saved when immediate held cleanup fails; snoozing never starts it', async t => {
+  const f = fixture(t);
+  f.service.config.hackathonMode = true;
+  await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
+  const question = (await learningTray(f.service, f.id)).questions[0];
+  let called = false;
+  const snoozed = await answerPreference(
+    f.service,
+    f.id,
+    { questionId: question.id, version: question.version, option: 'later' },
+    () => {
+      called = true;
+    }
+  );
+  assert.equal(snoozed.status, 'snoozed');
+  assert.equal(called, false);
+  f.store.run('UPDATE agent_questions SET snoozed_until=0 WHERE id=?', question.id);
+  const row = f.store.get('SELECT version FROM agent_questions WHERE id=?', question.id);
+  const result = await answerPreference(
+    f.service,
+    f.id,
+    { questionId: question.id, version: row.version, option: 'read' },
+    (answer, guard) =>
+      cleanAnsweredHolds(f.service, f.id, answer, guard, async () => {
+        throw new Error('Synthetic failure');
+      })
+  );
+  assert.equal(result.status, 'saved');
+  assert.equal(result.cleanup.status, 'failed');
+  assert.equal((await learningTray(f.service, f.id)).memories[0].action, 'read');
+  assert.equal(f.writes(), 0);
+});
+
+test('an immediately rechecked held notice that is too young can age into its saved rule on a later daily run', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-24T12:00:00Z') });
+  const f = fixture(t);
+  f.service.config.hackathonMode = true;
+  const message = f.messages.get('one');
+  f.messages.clear();
+  f.messages.set('one', message);
+  message.internalDate = String(Date.now() - 10 * 86400000);
+  message.payload.headers.find(h => h.name === 'Subject').value = 'Login confirmation';
+  f.store.run('UPDATE accounts SET rules=? WHERE id=?', JSON.stringify({ ...f.rules, daily: true }), f.id);
+  await askPreference(f.service, f.id, message, f.rules.agent, {
+    ...args,
+    category: 'security_notices',
+    minAgeDays: 30
+  });
+  const question = (await learningTray(f.service, f.id)).questions[0];
+  const infer = async () => ({
+    action: 'read',
+    confidence: 1,
+    reason: 'Routine old login notice',
+    preferenceCategory: 'security_notices',
+    categoryConfidence: 1,
+    routineNotice: true
+  });
+  const result = await answerPreference(
+    f.service,
+    f.id,
+    { questionId: question.id, version: question.version, option: 'read' },
+    (answer, guard) =>
+      cleanAnsweredHolds(f.service, f.id, answer, guard, async (...params) => {
+        params[5] = infer;
+        return runAgent(...params);
+      })
+  );
+  assert.equal(result.cleanup.changed, 0);
+  assert.equal(f.store.get('SELECT count(*) AS n FROM agent_assessments').n, 0);
+  t.mock.timers.tick(21 * 86400000);
+  const later = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'daily', infer));
+  assert.equal(later.changed, 1);
+  assert.equal(message.labelIds.includes('UNREAD'), false);
+});
+
+test('answer cleanup respects free trial scope without double charging already counted held messages', async t => {
+  const f = fixture(t);
+  await accessFor(f.service, f.id);
+  f.store.run(
+    'INSERT INTO trial_samples(account_id,payload) VALUES(?,?)',
+    f.id,
+    f.crypto.seal({ ids: ['one', 'two'] })
+  );
+  await reserveFreeEmail(f.service, f.id, 'one');
+  for (let i = 0; i < 99; i++) await reserveFreeEmail(f.service, f.id, `used-${i}`);
+  await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
+  await askPreference(f.service, f.id, f.messages.get('two'), f.rules.agent, args);
+  const question = (await learningTray(f.service, f.id)).questions[0];
+  const result = await answerPreference(
+    f.service,
+    f.id,
+    { questionId: question.id, version: question.version, option: 'read' },
+    (answer, guard) =>
+      cleanAnsweredHolds(f.service, f.id, answer, guard, async (...params) => {
+        params[5] = async () => ({
+          action: 'read',
+          confidence: 1,
+          reason: 'Resolved question',
+          preferenceCategory: 'product_announcements',
+          categoryConfidence: 1
+        });
+        return runAgent(...params);
+      })
+  );
+  assert.equal(result.cleanup.changed, 1);
+  assert.equal((await accessFor(f.service, f.id)).used, 100);
+  assert.equal(f.messages.get('one').labelIds.includes('UNREAD'), false);
+  assert.equal(f.messages.get('two').labelIds.includes('UNREAD'), true);
+});
+
+test('large held sets are processed in bounded snapshots and cross-account question IDs cannot select targets', async t => {
+  const f = fixture(t);
+  f.service.config.hackathonMode = true;
+  await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
+  const question = (await learningTray(f.service, f.id)).questions[0];
+  const scope = categoryScope('product_announcements');
+  for (let i = 0; i < 205; i++) await holdEmail(f.service, f.id, `held-${i}`, scope, question.id);
+  const sizes = [];
+  const result = await answerPreference(
+    f.service,
+    f.id,
+    { questionId: question.id, version: question.version, option: 'read' },
+    (answer, guard) =>
+      cleanAnsweredHolds(f.service, f.id, answer, guard, async (...params) => {
+        sizes.push(params[7].messageIds.length);
+        return { inspected: params[7].messageIds.length, changed: params[7].messageIds.length };
+      })
+  );
+  assert.deepEqual(sizes, [100, 100, 6]);
+  assert.equal(result.cleanup.inspected, 206);
+  const foreign = await cleanAnsweredHolds(
+    f.service,
+    'another-account',
+    { status: 'saved', answeredQuestionIds: [question.id] },
+    async () => {},
+    async () => {
+      throw new Error('Must not run');
+    }
+  );
+  assert.equal(foreign.cleanup.status, 'not_needed');
 });
 
 test('cleanup does not release unanswered or snoozed question holds', async t => {

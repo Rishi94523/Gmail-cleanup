@@ -9,6 +9,8 @@ import { createApp } from '../server/index.js';
 import { DEFAULT_RULES } from '../server/rules.js';
 import { primaryUnreadCount } from '../server/gmail.js';
 import { failure } from '../server/failures.js';
+import { DEFAULT_PREFERENCES } from '../server/agent.js';
+import { askPreference, learningTray } from '../server/learning.js';
 
 async function setup(t, configured = false, config = {}, options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'inboxclean-http-'));
@@ -67,6 +69,124 @@ test('unconfigured app serves real setup state, secure headers, and no invented 
   assert.match(status.headers.get('set-cookie'), /HttpOnly; SameSite=Lax/);
   assert.equal((await call('/api/scan', { method: 'POST' })).status, 401);
   assert.equal((await call('/.env')).status, 404);
+});
+
+test('answer HTTP request saves then cleans its held subset before responding without an inbox sweep', async t => {
+  const messages = new Map(
+    ['held', 'unrelated'].map(id => [
+      id,
+      {
+        id,
+        historyId: '1',
+        internalDate: String(Date.now() - 90 * 86400000),
+        labelIds: ['INBOX', 'UNREAD'],
+        payload: {
+          mimeType: 'text/plain',
+          headers: [
+            { name: 'From', value: 'updates@example.invalid' },
+            { name: 'Subject', value: 'Synthetic product announcement' }
+          ],
+          body: { data: Buffer.from('A synthetic product release.').toString('base64url') }
+        }
+      }
+    ])
+  );
+  const writes = [];
+  const { app, call } = await setup(
+    t,
+    true,
+    { aiKey: 'synthetic-only', aiProvider: 'nebius', hackathonMode: true, scheduler: false },
+    {
+      clientFactory: () => async (path, body) => {
+        if (path.startsWith('messages?')) throw new Error('A full mailbox candidate search must not run');
+        if (path === 'labels') return { labels: [{ id: 'CLEANED', name: 'Cleaned by agent' }] };
+        const id = path.split('/')[1].split('?')[0];
+        const message = messages.get(id);
+        if (body) {
+          writes.push(id);
+          message.labelIds = message.labelIds.filter(l => !body.removeLabelIds.includes(l));
+        }
+        return structuredClone(message);
+      }
+    }
+  );
+  const first = await call('/api/status');
+  const cookie = first.headers.get('set-cookie').split(';')[0];
+  const state = await first.json();
+  const id = 'owner@example.invalid';
+  const rules = {
+    ...DEFAULT_RULES,
+    agent: {
+      ...DEFAULT_PREFERENCES,
+      enabled: true,
+      consent: true,
+      consentProvider: 'nebius',
+      keepPeople: false,
+      autoUnsubscribe: false,
+      topicActions: true
+    }
+  };
+  app.store.run(
+    'INSERT INTO accounts(id,email,tokens,rules,created) VALUES(?,?,?,?,?)',
+    id,
+    id,
+    app.service.crypto.seal({}),
+    JSON.stringify(rules),
+    Date.now()
+  );
+  app.store.run('UPDATE sessions SET account_id=?', id);
+  await askPreference(app.service, id, messages.get('held'), rules.agent, {
+    category: 'product_announcements',
+    question: 'How should I handle product announcements?',
+    reason: 'Synthetic recurring updates.'
+  });
+  const q = (await learningTray(app.service, id)).questions[0];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json({
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: {
+            content: JSON.stringify({
+              decisions: [
+                {
+                  id: 'email_1',
+                  decision: {
+                    action: 'read',
+                    confidence: 1,
+                    reason: 'Saved preference',
+                    preferenceCategory: 'product_announcements',
+                    categoryConfidence: 1
+                  }
+                }
+              ]
+            })
+          }
+        }
+      ]
+    });
+  try {
+    const response = await call('/api/agent/questions/answer', {
+      method: 'POST',
+      headers: {
+        Cookie: cookie,
+        Origin: 'http://localhost:3000',
+        'X-CSRF-Token': state.csrf,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ questionId: q.id, version: q.version, option: 'read' })
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.status, 'saved');
+    assert.equal(result.cleanup.status, 'completed');
+    assert.equal(result.cleanup.changed, 1);
+    assert.deepEqual(writes, ['held']);
+    assert.equal(messages.get('unrelated').labelIds.includes('UNREAD'), true);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 });
 
 test('mailbox count includes only unread Primary inbox messages across all result pages', async t => {

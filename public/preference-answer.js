@@ -5,6 +5,14 @@ const escape = value =>
   );
 const actions = { keep: 'Keep unchanged', read: 'Mark as read', archive: 'Archive', both: 'Mark read and archive' };
 
+export function answerCleanupMessage(result) {
+  if (result?.cleanup?.status === 'failed')
+    return 'Preference saved. Cleanup of held emails stopped; check Activity before retrying.';
+  if (result?.cleanup?.status === 'completed')
+    return `Preference saved. ${result.cleanup.inspected} held emails checked · ${result.cleanup.changed} tidied${result.cleanup.waiting ? ` · ${result.cleanup.waiting} still need review` : ''}.`;
+  return 'Preference saved. It applies to older and newer mail.';
+}
+
 export function writePreference(container, { question, request, onSaved, onCancel }) {
   let text = '';
   let proposal;
@@ -31,7 +39,8 @@ export function writePreference(container, { question, request, onSaved, onCance
       });
       try {
         if (proposal) {
-          await request('/api/agent/questions/answer', {
+          container.querySelector('[data-custom-submit]').textContent = 'Saving & checking…';
+          const result = await request('/api/agent/questions/answer', {
             questionId: question.id,
             version: question.version,
             option: 'custom',
@@ -39,7 +48,7 @@ export function writePreference(container, { question, request, onSaved, onCance
             minAgeDays: proposal.minAgeDays,
             instructions: text.trim()
           });
-          await onSaved();
+          await onSaved(result);
         } else {
           const result = await request('/api/agent/questions/interpret', {
             questionId: question.id,
@@ -66,7 +75,7 @@ export function writeNotes(container, { request, onSaved, onSkip, initial = fals
   let proposal;
   let busy = false;
   function render(error = '') {
-    container.innerHTML = `<form class="preference-composer"><label for="${initial ? 'ob-notes' : 'preference-notes'}">${initial ? 'Anything your agent should keep in mind?' : 'Add or change a preference'}</label><textarea id="${initial ? 'ob-notes' : 'preference-notes'}" rows="3" maxlength="2000" placeholder="For example: Archive product announcements after 30 days, but keep Apple announcements." ${proposal ? 'readonly' : ''}>${escape(text)}</textarea>${proposal ? `<div class="notes-preview" aria-live="polite"><p>Here’s what I’ll remember:</p><ul>${proposal.topics.map(t => `<li><strong>${escape(t.scope.label)}</strong> · ${escape(actions[t.action])}${t.minAgeDays ? ` after ${t.minAgeDays} days` : ''}${t.replaces ? ' · replaces your current choice' : ''}</li>`).join('')}${proposal.context ? `<li>Remember your background and interests</li>` : ''}</ul><p class="notes-conditions">${escape(text)}</p></div>` : ''}<p class="custom-error" role="alert">${escape(error)}</p><div class="custom-buttons"><button class="primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Thinking…' : proposal ? 'Save these preferences' : 'Review my instructions'} →</button>${proposal ? '<button class="text-button" type="button" data-edit-notes>Edit my words</button>' : onSkip ? `<button class="text-button" type="button" data-skip-notes>${initial ? 'Nothing else, start cleanup' : 'Cancel'}</button>` : ''}</div><p class="custom-hint">${initial ? 'We’ll save your instructions before cleanup starts.' : 'Saving leaves emails unchanged. Your next manual or daily cleanup can reconsider older mail.'} Nothing is deleted.</p></form>`;
+    container.innerHTML = `<form class="preference-composer"><label for="${initial ? 'ob-notes' : 'preference-notes'}">${initial ? 'Anything your agent should keep in mind?' : 'Add or change a preference'}</label><textarea id="${initial ? 'ob-notes' : 'preference-notes'}" rows="3" maxlength="2000" placeholder="For example: Archive product announcements after 30 days, but keep Apple announcements." ${proposal ? 'readonly' : ''}>${escape(text)}</textarea>${proposal ? `<div class="notes-preview" aria-live="polite"><p>Here’s what I’ll remember:</p><ul>${proposal.topics.map(t => `<li><strong>${escape(t.scope.label)}</strong> · ${escape(actions[t.action])}${t.minAgeDays ? ` after ${t.minAgeDays} days` : ''}${t.replaces ? ' · replaces your current choice' : ''}</li>`).join('')}${proposal.context ? `<li>Remember your background and interests</li>` : ''}</ul><p class="notes-conditions">${escape(text)}</p></div>` : ''}<p class="custom-error" role="alert">${escape(error)}</p><div class="custom-buttons"><button class="primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Thinking…' : proposal ? 'Save these preferences' : 'Review my instructions'} →</button>${proposal ? '<button class="text-button" type="button" data-edit-notes>Edit my words</button>' : onSkip ? `<button class="text-button" type="button" data-skip-notes>${initial ? 'Nothing else, start cleanup' : 'Cancel'}</button>` : ''}</div><p class="custom-hint">${initial ? 'We’ll save your instructions before cleanup starts.' : 'If this answers a pending question, its held emails are rechecked immediately.'} Nothing is deleted.</p></form>`;
     const form = container.querySelector('form');
     const field = form.querySelector('textarea');
     field.oninput = () => {
@@ -90,11 +99,12 @@ export function writeNotes(container, { request, onSaved, onSkip, initial = fals
       });
       try {
         if (proposal) {
-          await request('/api/agent/preferences/save', { token: proposal.token });
+          form.querySelector('button[type=submit]').textContent = 'Saving & checking…';
+          const result = await request('/api/agent/preferences/save', { token: proposal.token });
           busy = false;
           text = '';
           proposal = null;
-          await onSaved();
+          await onSaved(result);
         } else {
           const result = await request('/api/agent/preferences/interpret', { text: text.trim() });
           busy = false;
