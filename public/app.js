@@ -534,7 +534,7 @@ function renderAgentControls() {
     : 'Start my agent →';
   $('.agent-budget').textContent = free
     ? `Free cleanup: ${state.access.used} of 100 Primary emails processed. Daily and additional cleanups are for paid plans. Paid plans are not on sale yet.`
-    : `Each run checks up to ${state.access?.limit || 500} unread messages in Primary. Manual runs apply your current preferences to older mail too. Unanswered questions stay unchanged.`;
+    : `Each run checks up to ${state.access?.limit || 500} unread messages in Primary. Manual and daily runs apply your preferences to older and newer mail. Unanswered questions stay unchanged.`;
   $('#save-preferences').textContent = 'Save settings →';
   $('#pref-action').closest('.preference-card').hidden = Boolean(p.topicActions);
   $('#pref-daily').disabled = free || !state.schedulerActive;
@@ -677,7 +677,7 @@ async function startAgent(onEvent = () => {}) {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf },
-    body: JSON.stringify({ authorize: true, includeExisting: true })
+    body: JSON.stringify({ authorize: true })
   });
   if (!response.ok) throw new Error('Agent could not start. Reload and try again.');
   const reader = response.body.getReader();
@@ -779,7 +779,7 @@ function renderLearning() {
     ? learningState.questions
         .map(
           q =>
-            `<form class="question-card" data-question="${escape(q.id)}"><p class="eyebrow">${escape(q.scope.label || q.scope.listId || q.scope.sender)}</p><h2>${escape(q.question)}</h2><p>${escape(q.reason)}</p><p class="question-context">Example: ${escape(q.sample.subject)}. Left unchanged.</p>${q.options.map(o => `<label class="question-option"><input type="radio" name="answer" value="${escape(o.id)}" required><span>${escape(o.label)}</span></label>`).join('')}<button class="primary" type="submit">Save my answer →</button><p>${q.initial ? 'Saved for this topic in your Primary sample and future cleanups.' : 'Saved for future mail. Start a manual cleanup to reconsider earlier held emails.'}</p></form>`
+            `<form class="question-card" data-question="${escape(q.id)}"><p class="eyebrow">${escape(q.scope.label || q.scope.listId || q.scope.sender)}</p><h2>${escape(q.question)}</h2><p>${escape(q.reason)}</p><p class="question-context">Example: ${escape(q.sample.subject)}. Left unchanged.</p>${q.options.map(o => `<label class="question-option"><input type="radio" name="answer" value="${escape(o.id)}" required><span>${escape(o.label)}</span></label>`).join('')}<button class="primary" type="submit">Save my answer →</button><p>${q.initial ? 'Saved for this topic in your Primary sample and future cleanups.' : 'Saved for older and newer mail. Your next manual or daily cleanup applies this preference.'}</p></form>`
         )
         .join('')
     : empty(
@@ -855,7 +855,7 @@ function renderPreferenceList() {
                   .join(
                     ''
                   )}</select></label><label>Only after this many days<input name="minAgeDays" type="number" min="${m.scope.minimumAgeDays || 0}" max="3650" value="${m.minAgeDays || m.scope.minimumAgeDays || 0}"></label></div>`
-          }<label>${note ? 'Your note' : 'Conditions or exceptions'}<textarea name="instructions" maxlength="2000" rows="2">${escape(m.instructions || '')}</textarea></label><div class="agent-actions"><button class="secondary" type="submit">Save change</button><button class="text-button" type="button" data-remove-memory="${escape(m.id)}">Remove</button></div><p class="custom-hint">${note ? 'Background helps the agent understand you; it does not grant cleanup permission.' : 'Applies to future cleanups. Protected and uncertain mail stays unchanged.'}</p></form></details>`;
+          }<label>${note ? 'Your note' : 'Conditions or exceptions'}<textarea name="instructions" maxlength="2000" rows="2">${escape(m.instructions || '')}</textarea></label><div class="agent-actions"><button class="secondary" type="submit">Save change</button><button class="text-button" type="button" data-remove-memory="${escape(m.id)}">Remove</button></div><p class="custom-hint">${note ? 'Background helps the agent understand you; it does not grant cleanup permission.' : 'Applies to older and newer mail in each cleanup. Protected and uncertain mail stays unchanged.'}</p></form></details>`;
         })
         .join('')
     : `<p class="preference-empty">${search ? 'No matching preferences. Try another search.' : 'Your answers and written preferences will appear here.'}</p>`;
@@ -901,7 +901,7 @@ $('#questions-tray').addEventListener('submit', event => {
         ? 'Question saved for tomorrow. Emails left unchanged.'
         : question.initial
           ? 'Setup answer saved. Start your free cleanup from Overview when ready.'
-          : 'Preference saved. Start a manual cleanup to reconsider earlier mail.'
+          : 'Preference saved. Your next cleanup can reconsider earlier mail.'
     );
   });
 });
@@ -919,7 +919,7 @@ $('#learned-preferences').addEventListener('submit', event => {
       instructions: new FormData(form).get('instructions')
     });
     await loadLearning();
-    toast('Preference updated for future mail.');
+    toast('Preference updated for older and newer mail.');
   });
 });
 $('#learned-preferences').addEventListener('click', event => {
@@ -929,7 +929,7 @@ $('#learned-preferences').addEventListener('click', event => {
   operation(button, 'Removing…', async () => {
     await request('/api/agent/memories/edit', { memoryId: memory.id, version: memory.version, remove: true });
     await loadLearning();
-    toast('Preference removed. Earlier held emails stay unchanged.');
+    toast('Preference removed. No emails were changed.');
   });
 });
 setInterval(() => {

@@ -11,12 +11,12 @@ A Gmail agent that learns what matters to you, then marks low-priority email as 
 3. Choose keep, mark read, archive, both, or write your own answer—independently for each topic.
    A final **“Anything else we should know?”** step accepts extra instructions or background before cleanup. The agent previews written preferences for confirmation; you can also skip it.
 4. During cleanup, the model reads email text and makes decisions using those preferences. Important or uncertain emails stay unchanged. **Nothing is deleted.**
-5. Unclear patterns become questions in your workspace. Answers are saved without automatically changing held mail. Starting a manual cleanup applies current preferences to its selected older emails too; unanswered questions stay protected. You can edit preferences and sender exceptions later.
+5. Unclear patterns become questions in your workspace. Answers are saved without automatically changing held mail. Both manual and daily cleanup apply current preferences to older and newer emails; only explicit topic-specific age conditions restrict age. Unanswered questions stay protected. You can edit preferences and sender exceptions later.
 6. Enable a daily routine with your time and timezone, or run cleanup manually. Pause daily runs for 1 day, 1 week, 1 month (30 days), or until you resume. Timed pauses expire automatically and manual cleanup remains available. The hackathon edition includes repeat runs and daily cleanup, with up to 100 Primary emails per run.
 
 The landing page has a looping, pausable animation of questions and inbox decisions. It uses example mail, not your Gmail.
 
-The Preferences page shows a compact, searchable list with expandable editors. Add or change preferences in plain language, review the proposed topic actions and conditions, then save. Background notes help interpret your interests without granting cleanup permission. Preferences and notes are encrypted and remain editable; saving alone does not run cleanup or release previously held mail.
+The Preferences page shows a compact, searchable list with expandable editors. Add or change preferences in plain language, review the proposed topic actions and conditions, then save. Background notes help interpret your interests without granting cleanup permission. Preferences and notes are encrypted and remain editable; saving alone does not run cleanup. The next manual or daily run can reconsider resolved holds using the current preferences. Preference save dates never restrict email eligibility.
 
 AI processing permission is collected during onboarding and retained on the account; settings do not repeat that checkbox. Pause daily runs without withdrawing setup permission, or disconnect Gmail from account settings to revoke access and remove account data. Daily scheduling has one control section; the obsolete separate AI filter permission is no longer shown.
 

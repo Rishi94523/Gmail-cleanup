@@ -142,7 +142,7 @@ test('written onboarding instructions preview first, save encrypted topic prefer
     const tray = await learningTray(f.service, f.id);
     assert.equal(tray.questions.length, 0);
     assert.equal(tray.memories[0].action, 'archive');
-    assert.deepEqual(tray.memories[0].initialSampleIds, ['one', 'two']);
+    assert.equal(tray.memories[0].applies, 'all_eligible_messages');
     assert.match(tray.memories[0].instructions, /keep Apple/);
     assert.ok(!f.store.get('SELECT payload FROM preference_memories').payload.includes('Apple'));
     let calls = 0;
@@ -456,7 +456,7 @@ test('a category answer applies to another brand and an Apple exception takes pr
   await answerPreference(f.service, f.id, { questionId: q.id, version: q.version, option: 'keep' });
   const memory = (await learningTray(f.service, f.id)).memories[0];
   const apple = mail('apple');
-  apple.internalDate = String(memory.effectiveFrom + 1000);
+  apple.internalDate = String(memory.savedAt + 1000);
   apple.payload.headers.find(h => h.name === 'From').value = 'news@email.apple.com';
   const other = mail('other');
   other.internalDate = apple.internalDate;
@@ -499,7 +499,7 @@ test('category scope and exception matching reject unknown categories and mislea
   assert.throws(() => validateExceptions([{ ...rules[0], value: '*@apple.com' }]), /complete sender/);
 });
 
-test('questions persist, deduplicate, hold mail immediately, and later answers affect only future messages', async t => {
+test('questions persist and deduplicate; answered preferences apply to held mail in the next cleanup', async t => {
   const f = fixture(t);
   const first = await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
   const second = await askPreference(f.service, f.id, f.messages.get('two'), f.rules.agent, args);
@@ -518,15 +518,19 @@ test('questions persist, deduplicate, hold mail immediately, and later answers a
   tray = await learningTray(f.service, f.id);
   assert.equal(tray.questions.length, 0);
   assert.equal(tray.memories[0].action, 'read');
-  assert.equal(tray.memories[0].applies, 'future_messages_only');
+  assert.equal(tray.memories[0].applies, 'all_eligible_messages');
   assert.equal(f.writes(), 0);
   const result = await f.service.locked(f.id, guard =>
-    runAgent(f.service, f.id, guard, undefined, 'manual', async () => {
-      throw new Error('Held emails must not be reconsidered');
-    })
+    runAgent(f.service, f.id, guard, undefined, 'manual', async () => ({
+      action: 'read',
+      confidence: 1,
+      reason: 'Saved product preference',
+      preferenceCategory: 'product_announcements',
+      categoryConfidence: 1
+    }))
   );
-  assert.equal(result.inspected, 0);
-  assert.ok(f.messages.get('one').labelIds.includes('UNREAD'));
+  assert.equal(result.changed, 2);
+  assert.equal(f.messages.get('one').labelIds.includes('UNREAD'), false);
   const memory = tray.memories[0];
   await editMemory(f.service, f.id, { memoryId: memory.id, version: memory.version, action: 'keep' });
   await assert.rejects(
@@ -549,15 +553,15 @@ test('snoozing a question never creates permission; it returns after the deadlin
   assert.equal((await learningTray(f.service, f.id)).questions.length, 1);
   assert.equal(f.writes(), 0);
 });
-test('saved answers inform new mail while older unseen mail in that scope stays untouched', async t => {
+test('saved preferences apply to old unseen mail and newer mail regardless of save time', async t => {
   const f = fixture(t);
   await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
   const q = (await learningTray(f.service, f.id)).questions[0];
   await answerPreference(f.service, f.id, { questionId: q.id, version: q.version, option: 'read' });
   const memory = (await learningTray(f.service, f.id)).memories[0];
-  f.messages.get('two').internalDate = String(memory.effectiveFrom - 1000);
+  f.messages.get('two').internalDate = String(memory.savedAt - 1000);
   const future = mail('new');
-  future.internalDate = String(memory.effectiveFrom + 1000);
+  future.internalDate = String(memory.savedAt + 1000);
   f.messages.set('new', future);
   let calls = 0;
   const result = await f.service.locked(f.id, guard =>
@@ -573,13 +577,13 @@ test('saved answers inform new mail while older unseen mail in that scope stays 
       };
     })
   );
-  assert.equal(calls, 2);
-  assert.equal(result.changed, 1);
-  assert.ok(f.messages.get('two').labelIds.includes('UNREAD'));
+  assert.equal(calls, 3);
+  assert.equal(result.changed, 3);
+  assert.equal(f.messages.get('two').labelIds.includes('UNREAD'), false);
   assert.ok(!f.messages.get('new').labelIds.includes('UNREAD'));
 });
 
-test('explicit manual backlog cleanup applies saved preferences to old resolved holds without changing future-only defaults', async t => {
+test('cleanup applies saved preferences to old resolved holds without an extra authorization flag', async t => {
   const f = fixture(t);
   for (const message of f.messages.values()) message.internalDate = String(Date.now() - 120 * 86400000);
   await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
@@ -601,18 +605,17 @@ test('explicit manual backlog cleanup applies saved preferences to old resolved 
         preferenceCategory: 'product_announcements',
         categoryConfidence: 1
       }),
-      undefined,
-      { includeExisting: true }
+      undefined
     )
   );
   assert.equal(result.changed, 2);
   assert.equal(f.writes(), 2);
   assert.ok(f.messages.get('one').labelIds.includes('INBOX'));
   const log = f.crypto.open(f.store.get("SELECT payload FROM plans WHERE status='agent_log'").payload);
-  assert.equal(log.includeExisting, true);
+  assert.equal(log.applies, 'all_eligible_messages');
 });
 
-test('explicit manual backlog cleanup does not release unanswered or snoozed question holds', async t => {
+test('cleanup does not release unanswered or snoozed question holds', async t => {
   const f = fixture(t);
   await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
   await askPreference(f.service, f.id, f.messages.get('two'), f.rules.agent, args);
@@ -628,15 +631,79 @@ test('explicit manual backlog cleanup does not release unanswered or snoozed que
       async () => {
         throw new Error('Pending question holds must not reach the model');
       },
-      undefined,
-      { includeExisting: true }
+      undefined
     )
   );
   assert.equal(result.inspected, 0);
   assert.equal(f.writes(), 0);
 });
 
-test('manual backlog review can reassess a hold that had no question, while uncertain writes remain excluded', async t => {
+test('daily cleanup applies a newly saved preference to old resolved holds without an age-of-preference cutoff', async t => {
+  const f = fixture(t);
+  f.service.config.hackathonMode = true;
+  f.store.run('UPDATE accounts SET rules=? WHERE id=?', JSON.stringify({ ...f.rules, daily: true }), f.id);
+  for (const message of f.messages.values()) message.internalDate = String(Date.now() - 200 * 86400000);
+  await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
+  await askPreference(f.service, f.id, f.messages.get('two'), f.rules.agent, args);
+  const question = (await learningTray(f.service, f.id)).questions[0];
+  await answerPreference(f.service, f.id, { questionId: question.id, version: question.version, option: 'read' });
+  const result = await f.service.locked(f.id, guard =>
+    runAgent(f.service, f.id, guard, undefined, 'daily', async () => ({
+      action: 'read',
+      confidence: 1,
+      reason: 'Saved product preference',
+      preferenceCategory: 'product_announcements',
+      categoryConfidence: 1
+    }))
+  );
+  assert.equal(result.changed, 2);
+  assert.equal(f.writes(), 2);
+});
+
+test('daily cleanup measures a saved 30-day security rule from today; recent and suspicious notices stay protected', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-24T12:00:00Z') });
+  const f = fixture(t);
+  f.service.config.hackathonMode = true;
+  f.store.run('UPDATE accounts SET rules=? WHERE id=?', JSON.stringify({ ...f.rules, daily: true }), f.id);
+  f.messages.get('one').internalDate = String(Date.now() - 60 * 86400000);
+  f.messages.get('two').internalDate = String(Date.now() - 10 * 86400000);
+  const suspicious = structuredClone(f.messages.get('one'));
+  suspicious.id = 'suspicious';
+  f.messages.set('suspicious', suspicious);
+  for (const [id, message] of f.messages)
+    message.payload.headers.find(h => h.name === 'Subject').value =
+      id === 'suspicious' ? 'Suspicious security alert' : 'Login confirmation';
+  f.store.run(
+    'INSERT INTO preference_memories(id,account_id,scope_hash,payload,updated) VALUES(?,?,?,?,?)',
+    'security',
+    f.id,
+    'category:security_notices',
+    f.crypto.seal({
+      scope: categoryScope('security_notices'),
+      action: 'read',
+      minAgeDays: 30,
+      effectiveFrom: Date.now() + 86400000,
+      applies: 'future_messages_only'
+    }),
+    Date.now()
+  );
+  const result = await f.service.locked(f.id, guard =>
+    runAgent(f.service, f.id, guard, undefined, 'daily', async () => ({
+      action: 'read',
+      confidence: 1,
+      reason: 'Routine historical login confirmation',
+      preferenceCategory: 'security_notices',
+      categoryConfidence: 1,
+      routineNotice: true
+    }))
+  );
+  assert.equal(result.changed, 1);
+  assert.equal(f.messages.get('one').labelIds.includes('UNREAD'), false);
+  assert.equal(f.messages.get('two').labelIds.includes('UNREAD'), true);
+  assert.equal(suspicious.labelIds.includes('UNREAD'), true);
+});
+
+test('cleanup can reassess a hold that had no question, while uncertain writes remain excluded', async t => {
   const f = fixture(t);
   f.service.config.hackathonMode = true;
   await holdEmail(f.service, f.id, 'one', scopeFor(f.messages.get('one')));
@@ -658,8 +725,7 @@ test('manual backlog review can reassess a hold that had no question, while unce
       undefined,
       'manual',
       async () => ({ action: 'read', confidence: 1, reason: 'Explicit review of older mail' }),
-      undefined,
-      { includeExisting: true }
+      undefined
     )
   );
   assert.equal(result.inspected, 1);
@@ -811,7 +877,7 @@ test('supported automatic request is recorded once; uncertain network outcomes n
   assert.equal(f.store.get('SELECT status FROM subscription_actions').status, 'uncertain');
 });
 
-test('stored initial question labels and explanations stay natural after cleanup; answers apply to future mail', async t => {
+test('stored question explanations stay natural; answers apply to old and new eligible mail', async t => {
   const f = fixture(t);
   f.store.run(
     'INSERT INTO trial_samples(account_id,payload) VALUES(?,?)',
@@ -844,7 +910,7 @@ test('stored initial question labels and explanations stay natural after cleanup
   assert.match(q.reason, /Your inbox includes/);
   assert.doesNotMatch(q.reason, /product_announcements|category preference/);
   const result = await answerPreference(f.service, f.id, { questionId: q.id, version: q.version, option: 'read' });
-  assert.equal(result.applies, 'future_messages_only');
+  assert.equal(result.applies, 'all_eligible_messages');
   assert.equal((await learningTray(f.service, f.id)).memories[0].initialSampleIds, undefined);
 });
 

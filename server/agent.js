@@ -144,7 +144,7 @@ export async function modelDecision(config, instruction, data) {
   );
 }
 export const AGENT_DECISION_INSTRUCTION =
-  'Use the supplied currentClock, receivedAt and ageDays. Follow topic-specific minAgeDays and written instructions; newer messages stay unchanged. Only a matching bank_transactions/security_notices preference with minAgeDays at least 30 can permit routine old bank or login notices. Return routineNotice:true only for clearly routine historical confirmations with no unresolved issue. Keep recent, suspicious, fraudulent, medical/legal, or uncertain alerts. Ask a broad age-based question if the preference is missing; never unsubscribe from transaction/security notices. ' +
+  'Use the supplied currentClock, receivedAt and ageDays. Follow written instructions. Apply an email-age restriction only when that topic explicitly has minAgeDays; compare receivedAt to the supplied currentClock/now, never to when a preference was saved. Without an explicit age condition, both older and newer emails follow the saved preference. Only a matching bank_transactions/security_notices preference with minAgeDays at least 30 can permit routine old bank or login notices. Return routineNotice:true only for clearly routine historical confirmations with no unresolved issue. Keep recent, suspicious, fraudulent, medical/legal, or uncertain alerts. Ask a broad age-based question if the preference is missing; never unsubscribe from transaction/security notices. ' +
   'Use userContext to understand interests, never to invent cleanup permissions. Follow written conditions in categoryPreferences; if any condition or sender exception is unclear, keep the email. Decide whether this email matters NOW using user preferences and explicit learnedPreference. Explicit topic preferences override broad keepJobs/keepNewsletters defaults for low-priority mail. A topic may keep, mark read, archive, or both independently of other topics. Keep jobs/recruiting/interviews/relevant LinkedIn when keepJobs=true and there is no explicit topic preference. Cold outreach: all keeps all; exceptional keeps clearly relevant opportunities based on interests; none permits clearing unsolicited pitches. Keep wanted blogs/newsletters, known people, exceptions, personal, medical, legal, time-sensitive or uncertain mail, and current or unresolved financial/security matters. Old routine bank/login confirmations may follow explicit matching age-based saved preferences; return routineNotice=true only when clearly routine and historical. Classify preferenceCategory from preferenceCategories and return categoryConfidence. Apply categoryPreferences across senders; explicit sender/domain exceptions take precedence over general category preferences. A user exception may keep or mark read Apple announcements even when the general product-announcement preference differs. If a broad category preference is missing, call ask_preference with its category. Never ask per-product or per-sender questions. Do not re-ask answered categories; keep uncertain messages instead. Never infer that every list is unwanted from the existence of unsubscribe headers. User-approved autoUnsubscribe may remove only clearly unwanted pure product marketing, never OTPs, transactional mail, intentional newsletters, or mixed-purpose lists. Choose keep, the permitted cleanup action, or unsubscribe only with autoUnsubscribe=true. Return JSON {"action":"keep|read|archive|both|unsubscribe","confidence":0.0,"reason":"short reason","preferenceCategory":"one allowed category or unknown","categoryConfidence":0.0,"emailType":"marketing|newsletter|transactional|personal|recruiting|unknown","subscriptionIntent":"wanted|unwanted|unknown","routineNotice":false,"historyTypes":[{"id":"provided history id","type":"marketing|newsletter|transactional|unknown"}]}. Incomplete text or uncertain user intent must be kept or asked about, not acted on.';
 
 export async function modelDecisionBatch(config, instruction, items, { retryUnclassified = true } = {}) {
@@ -463,12 +463,10 @@ export async function runAgent(
   emit = () => {},
   mode = 'manual',
   infer = modelDecision,
-  unsubscribe = automaticUnsubscribe,
-  options = {}
+  unsubscribe = automaticUnsubscribe
 ) {
   const account = await service.account(id);
   const p = preferences(account.rules.agent);
-  const includeExisting = mode === 'manual' && options.includeExisting === true;
   if (!p.enabled || !p.consent || !service.config.aiKey)
     throw new Error('Save your preferences and enable AI processing before starting the agent.');
   if (p.consentProvider !== (service.config.aiProvider || 'nebius'))
@@ -501,7 +499,7 @@ export async function runAgent(
     .update(
       JSON.stringify({
         primaryScope: PRIMARY_SCOPE_VERSION,
-        application: includeExisting ? 'selected-backlog-v1' : 'future-messages-v1',
+        application: 'all-eligible-messages-v2',
         rules: assessmentRules(account.rules),
         userContext: learnedCategories.notes,
         topicPreferences: learnedCategories.memories.map(m => ({ id: m.id, version: m.version })),
@@ -532,18 +530,18 @@ export async function runAgent(
     "INSERT INTO plans(id,account_id,payload,status,created) VALUES(?,?,?,'agent_log',?)",
     logId,
     id,
-    service.crypto.seal({ runId, includeExisting, decisions }),
+    service.crypto.seal({ runId, applies: 'all_eligible_messages', decisions }),
     Date.now()
   );
   try {
     send({ type: 'stage', message: 'Finding unread inbox messages' });
     // Gather IDs before changing labels so Gmail pagination cannot skip shifted results.
     const ids = [];
-    // A user-started backlog run may reconsider old holds, but unanswered or
-    // snoozed questions still cannot grant permission. Daily runs keep all holds.
-    const unresolvedHoldFilter = includeExisting
-      ? " AND EXISTS (SELECT 1 FROM agent_questions q WHERE q.account_id=agent_holds.account_id AND q.status='pending' AND (q.id=agent_holds.question_id OR q.scope_hash=agent_holds.scope_hash))"
-      : '';
+    // Saved preferences apply to the whole eligible backlog in every run mode.
+    // Only unanswered/snoozed questions remain held; saving a preference itself
+    // still never performs Gmail writes.
+    const unresolvedHoldFilter =
+      " AND EXISTS (SELECT 1 FROM agent_questions q WHERE q.account_id=agent_holds.account_id AND q.status='pending' AND (q.id=agent_holds.question_id OR q.scope_hash=agent_holds.scope_hash))";
     let pageToken;
     let pages = 0;
     if (access.tier === 'free' || firstHackathonRun) {
@@ -618,17 +616,6 @@ export async function runAgent(
       const specificMemory = await memoryFor(service, id, scope);
       const earlyException = matchingException(p.exceptionsRules, sender, null);
       if (!protect && earlyException?.action === 'keep') protect = 'Your sender exception keeps this email';
-      if (
-        !protect &&
-        !includeExisting &&
-        specificMemory &&
-        (!Number.isFinite(Number(message.internalDate)) ||
-          Number(message.internalDate) < specificMemory.effectiveFrom) &&
-        !specificMemory.initialSampleIds?.includes(message.id)
-      ) {
-        await holdEmail(service, id, message.id, scope, specificMemory.sourceQuestion);
-        protect = 'Received before your answer; left unchanged';
-      }
       if (!protect && !earlyException && specificMemory?.action === 'keep')
         protect = 'You chose to keep this sender or list';
       const content = emailText(message.payload) || String(message.snippet || '').slice(0, 12000);
@@ -796,16 +783,6 @@ export async function runAgent(
         await holdEmail(service, id, message.id, scope);
         protect = 'Uncertain category; left unchanged to respect your general preferences';
       }
-      if (
-        !protect &&
-        !includeExisting &&
-        memory?.scope.kind === 'category' &&
-        (!Number.isFinite(Number(message.internalDate)) || Number(message.internalDate) < memory.effectiveFrom) &&
-        !memory.initialSampleIds?.includes(message.id)
-      ) {
-        await holdEmail(service, id, message.id, broadScope, memory.sourceQuestion);
-        protect = 'Received before your category answer; left unchanged';
-      }
       const pending = classified ? learnedCategories.questions.find(q => q.scope_hash === broadScope.scopeHash) : null;
       if (!protect && pending && !exception && !specificMemory) {
         await holdEmail(service, id, message.id, broadScope, pending.id);
@@ -950,7 +927,7 @@ export async function runAgent(
       decisions.push({ id: messageId, sender, subject: h.subject || '(No subject)', ...result });
       await service.store.run(
         'UPDATE plans SET payload=? WHERE id=?',
-        service.crypto.seal({ runId, includeExisting, decisions }),
+        service.crypto.seal({ runId, applies: 'all_eligible_messages', decisions }),
         logId
       );
       await service.store.run('UPDATE runs SET changed=?,skipped=? WHERE id=?', changed, kept, runId);

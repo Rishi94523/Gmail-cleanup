@@ -230,7 +230,11 @@ export async function learningTray(service, id) {
       };
     }),
     questionsTotal: pending.total,
-    memories: memories.map(({ payload, ...row }) => ({ ...row, ...service.crypto.open(payload) })),
+    memories: memories.map(({ payload, ...row }) => ({
+      ...row,
+      ...service.crypto.open(payload),
+      applies: 'all_eligible_messages'
+    })),
     discovery: discovery ? service.crypto.open(discovery.payload) : null
   };
 }
@@ -336,16 +340,9 @@ export async function answerPreference(service, id, input) {
         instructions: custom ? input.instructions.trim() : '',
         sourceQuestion: row.id,
         explanation: question.question,
-        applies: 'future_messages_only',
-        effectiveFrom: Date.now()
+        applies: 'all_eligible_messages',
+        savedAt: Date.now()
       };
-      if (question.initial && (await initialSamplePending(service, id, tx))) {
-        const sample = await tx.get('SELECT payload FROM trial_samples WHERE account_id=?', id);
-        if (sample) {
-          memory.initialSampleIds = service.crypto.open(sample.payload).ids;
-          memory.applies = 'initial_sample_and_future_messages';
-        }
-      }
       await tx.run(
         'INSERT INTO preference_memories(id,account_id,scope_hash,payload,updated) VALUES(?,?,?,?,?) ON CONFLICT(account_id,scope_hash) DO UPDATE SET payload=excluded.payload,version=preference_memories.version+1,updated=excluded.updated',
         randomUUID(),
@@ -397,7 +394,9 @@ export async function editMemory(service, id, input) {
       memory.action = input.action;
       memory.minAgeDays = minAgeDays;
       if (input.instructions !== undefined) memory.instructions = input.instructions.trim();
-      memory.effectiveFrom = Date.now();
+      memory.savedAt = Date.now();
+      delete memory.effectiveFrom;
+      memory.applies = 'all_eligible_messages';
       await tx.run(
         'UPDATE preference_memories SET payload=?,version=version+1,updated=? WHERE id=? AND account_id=?',
         service.crypto.seal(memory),
@@ -406,7 +405,7 @@ export async function editMemory(service, id, input) {
         id
       );
       await recordEvent(tx, service, id, { kind: 'edit', memoryId: row.id, previous, memory });
-      return { status: 'saved', applies: 'future_messages_only' };
+      return { status: 'saved', applies: 'all_eligible_messages' };
     })
   );
 }
@@ -505,17 +504,12 @@ export async function saveNotes(service, id, input) {
       if (snapshot.fingerprint !== proposal.fingerprint)
         throw new Error('Your preferences changed. Review your instructions again before saving.');
       const now = Date.now();
-      const sample =
-        (await initialSamplePending(service, id, tx)) &&
-        (await tx.get('SELECT payload FROM trial_samples WHERE account_id=?', id));
-      const initialSampleIds = sample ? service.crypto.open(sample.payload).ids : null;
       for (const topic of proposal.topics) {
         const memory = {
           ...topic,
           explanation: topic.scope.label,
-          applies: initialSampleIds ? 'initial_sample_and_future_messages' : 'future_messages_only',
-          effectiveFrom: now,
-          ...(initialSampleIds ? { initialSampleIds } : {})
+          applies: 'all_eligible_messages',
+          savedAt: now
         };
         await tx.run(
           'INSERT INTO preference_memories(id,account_id,scope_hash,payload,updated) VALUES(?,?,?,?,?) ON CONFLICT(account_id,scope_hash) DO UPDATE SET payload=excluded.payload,version=preference_memories.version+1,updated=excluded.updated',
@@ -543,8 +537,8 @@ export async function saveNotes(service, id, input) {
           minAgeDays: 0,
           instructions: proposal.context,
           explanation: 'Context for future decisions; does not authorize cleanup.',
-          effectiveFrom: now,
-          applies: 'future_messages_only'
+          savedAt: now,
+          applies: 'all_eligible_messages'
         };
         await tx.run(
           'INSERT INTO preference_memories(id,account_id,scope_hash,payload,updated) VALUES(?,?,?,?,?)',
@@ -558,7 +552,7 @@ export async function saveNotes(service, id, input) {
       }
       return {
         status: 'saved',
-        applies: initialSampleIds ? 'initial_sample_and_future_messages' : 'future_messages_only'
+        applies: 'all_eligible_messages'
       };
     })
   );

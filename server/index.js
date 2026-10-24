@@ -330,11 +330,7 @@ export async function createApp(options = {}) {
           };
           const heartbeat = setInterval(() => emit({ type: 'heartbeat' }), 10000);
           try {
-            await service.locked(id, guard =>
-              runAgent(service, id, guard, emit, 'manual', undefined, undefined, {
-                includeExisting: input.includeExisting === true
-              })
-            );
+            await service.locked(id, guard => runAgent(service, id, guard, emit));
           } catch (error) {
             emit({ type: 'error', ...publicFailure(error) });
           } finally {
