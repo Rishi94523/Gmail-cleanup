@@ -534,7 +534,7 @@ function renderAgentControls() {
     : 'Start my agent →';
   $('.agent-budget').textContent = free
     ? `Free cleanup: ${state.access.used} of 100 Primary emails processed. Daily and additional cleanups are for paid plans. Paid plans are not on sale yet.`
-    : `Each run checks up to ${state.access?.limit || 500} unread messages in Primary. Daily cleanup is included. Nothing is deleted.`;
+    : `Each run checks up to ${state.access?.limit || 500} unread messages in Primary. Manual runs apply your current preferences to older mail too. Unanswered questions stay unchanged.`;
   $('#save-preferences').textContent = 'Save settings →';
   $('#pref-action').closest('.preference-card').hidden = Boolean(p.topicActions);
   $('#pref-daily').disabled = free || !state.schedulerActive;
@@ -677,7 +677,7 @@ async function startAgent(onEvent = () => {}) {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf },
-    body: JSON.stringify({ authorize: true })
+    body: JSON.stringify({ authorize: true, includeExisting: true })
   });
   if (!response.ok) throw new Error('Agent could not start. Reload and try again.');
   const reader = response.body.getReader();
@@ -779,7 +779,7 @@ function renderLearning() {
     ? learningState.questions
         .map(
           q =>
-            `<form class="question-card" data-question="${escape(q.id)}"><p class="eyebrow">${escape(q.scope.label || q.scope.listId || q.scope.sender)}</p><h2>${escape(q.question)}</h2><p>${escape(q.reason)}</p><p class="question-context">Example: ${escape(q.sample.subject)}. Left unchanged.</p>${q.options.map(o => `<label class="question-option"><input type="radio" name="answer" value="${escape(o.id)}" required><span>${escape(o.label)}</span></label>`).join('')}<button class="primary" type="submit">Save my answer →</button><p>${q.initial ? 'Saved for this topic in your Primary sample and future cleanups.' : 'Saved for this topic in future cleanups. Earlier emails left waiting stay unchanged.'}</p></form>`
+            `<form class="question-card" data-question="${escape(q.id)}"><p class="eyebrow">${escape(q.scope.label || q.scope.listId || q.scope.sender)}</p><h2>${escape(q.question)}</h2><p>${escape(q.reason)}</p><p class="question-context">Example: ${escape(q.sample.subject)}. Left unchanged.</p>${q.options.map(o => `<label class="question-option"><input type="radio" name="answer" value="${escape(o.id)}" required><span>${escape(o.label)}</span></label>`).join('')}<button class="primary" type="submit">Save my answer →</button><p>${q.initial ? 'Saved for this topic in your Primary sample and future cleanups.' : 'Saved for future mail. Start a manual cleanup to reconsider earlier held emails.'}</p></form>`
         )
         .join('')
     : empty(
@@ -901,7 +901,7 @@ $('#questions-tray').addEventListener('submit', event => {
         ? 'Question saved for tomorrow. Emails left unchanged.'
         : question.initial
           ? 'Setup answer saved. Start your free cleanup from Overview when ready.'
-          : 'Preference saved for future mail. Earlier emails left unchanged.'
+          : 'Preference saved. Start a manual cleanup to reconsider earlier mail.'
     );
   });
 });

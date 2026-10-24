@@ -578,6 +578,94 @@ test('saved answers inform new mail while older unseen mail in that scope stays 
   assert.ok(f.messages.get('two').labelIds.includes('UNREAD'));
   assert.ok(!f.messages.get('new').labelIds.includes('UNREAD'));
 });
+
+test('explicit manual backlog cleanup applies saved preferences to old resolved holds without changing future-only defaults', async t => {
+  const f = fixture(t);
+  for (const message of f.messages.values()) message.internalDate = String(Date.now() - 120 * 86400000);
+  await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
+  await askPreference(f.service, f.id, f.messages.get('two'), f.rules.agent, args);
+  const q = (await learningTray(f.service, f.id)).questions[0];
+  await answerPreference(f.service, f.id, { questionId: q.id, version: q.version, option: 'read' });
+  assert.equal(f.writes(), 0);
+  const result = await f.service.locked(f.id, guard =>
+    runAgent(
+      f.service,
+      f.id,
+      guard,
+      undefined,
+      'manual',
+      async () => ({
+        action: 'read',
+        confidence: 1,
+        reason: 'Saved topic preference',
+        preferenceCategory: 'product_announcements',
+        categoryConfidence: 1
+      }),
+      undefined,
+      { includeExisting: true }
+    )
+  );
+  assert.equal(result.changed, 2);
+  assert.equal(f.writes(), 2);
+  assert.ok(f.messages.get('one').labelIds.includes('INBOX'));
+  const log = f.crypto.open(f.store.get("SELECT payload FROM plans WHERE status='agent_log'").payload);
+  assert.equal(log.includeExisting, true);
+});
+
+test('explicit manual backlog cleanup does not release unanswered or snoozed question holds', async t => {
+  const f = fixture(t);
+  await askPreference(f.service, f.id, f.messages.get('one'), f.rules.agent, args);
+  await askPreference(f.service, f.id, f.messages.get('two'), f.rules.agent, args);
+  const q = (await learningTray(f.service, f.id)).questions[0];
+  await answerPreference(f.service, f.id, { questionId: q.id, version: q.version, option: 'later' });
+  const result = await f.service.locked(f.id, guard =>
+    runAgent(
+      f.service,
+      f.id,
+      guard,
+      undefined,
+      'manual',
+      async () => {
+        throw new Error('Pending question holds must not reach the model');
+      },
+      undefined,
+      { includeExisting: true }
+    )
+  );
+  assert.equal(result.inspected, 0);
+  assert.equal(f.writes(), 0);
+});
+
+test('manual backlog review can reassess a hold that had no question, while uncertain writes remain excluded', async t => {
+  const f = fixture(t);
+  f.service.config.hackathonMode = true;
+  await holdEmail(f.service, f.id, 'one', scopeFor(f.messages.get('one')));
+  await holdEmail(f.service, f.id, 'two', scopeFor(f.messages.get('two')));
+  f.store.run(
+    "INSERT INTO changes(id,run_id,account_id,message_id,payload,status,created) VALUES(?,?,?,?,?,'uncertain',?)",
+    'uncertain-change',
+    'old-run',
+    f.id,
+    'two',
+    f.crypto.seal({}),
+    Date.now()
+  );
+  const result = await f.service.locked(f.id, guard =>
+    runAgent(
+      f.service,
+      f.id,
+      guard,
+      undefined,
+      'manual',
+      async () => ({ action: 'read', confidence: 1, reason: 'Explicit review of older mail' }),
+      undefined,
+      { includeExisting: true }
+    )
+  );
+  assert.equal(result.inspected, 1);
+  assert.equal(result.changed, 1);
+  assert.equal(f.messages.get('two').labelIds.includes('UNREAD'), true);
+});
 test('agent tool calls queue questions without waiting; same-pattern messages and future held runs stay unchanged', async t => {
   const f = fixture(t);
   let modelCalls = 0;

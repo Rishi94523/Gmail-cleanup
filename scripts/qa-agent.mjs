@@ -47,7 +47,7 @@ try {
       ran = true;
       state.access.used = 100;
       state.access.remaining = 0;
-      assert.deepEqual(route.request().postDataJSON(), { authorize: true });
+      assert.deepEqual(route.request().postDataJSON(), { authorize: true, includeExisting: true });
       return route.fulfill({
         contentType: 'application/x-ndjson',
         body:

@@ -722,6 +722,130 @@ test('batch preference proposal beside the id normalizes to a question, never a 
   }
 });
 
+test('unclassified batch results get one focused retry with independent aliases and a complete saved-topic decision', async () => {
+  const previousFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (_url, options) => {
+    const request = JSON.parse(options.body);
+    calls++;
+    if (calls === 2) {
+      assert.match(request.messages[0].content, /CATEGORY CLARIFICATION PASS/);
+      const items = JSON.parse(request.messages[1].content);
+      assert.equal(items.length, 1);
+      assert.equal(items[0].subject, 'Synthetic weekly report');
+    }
+    return Response.json({
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: {
+            content: JSON.stringify({
+              decisions:
+                calls === 1
+                  ? [
+                      {
+                        id: 'email_1',
+                        decision: {
+                          action: 'read',
+                          confidence: 1,
+                          reason: 'Saved products topic',
+                          preferenceCategory: 'product_announcements',
+                          categoryConfidence: 1
+                        }
+                      },
+                      {
+                        id: 'email_2',
+                        decision: {
+                          action: 'keep',
+                          confidence: 1,
+                          reason: 'Category unclear',
+                          preferenceCategory: 'unknown',
+                          categoryConfidence: 0
+                        }
+                      }
+                    ]
+                  : [
+                      {
+                        id: 'email_1',
+                        decision: {
+                          action: 'read',
+                          confidence: 0.96,
+                          reason: 'A routine report follows the newsletters preference',
+                          preferenceCategory: 'newsletters',
+                          categoryConfidence: 0.96
+                        }
+                      }
+                    ]
+            })
+          }
+        }
+      ]
+    });
+  };
+  try {
+    const result = await modelDecisionBatch({ aiKey: 'synthetic-only' }, 'Use saved topic preferences.', [
+      { id: 'product', subject: 'Synthetic product update' },
+      { id: 'report', subject: 'Synthetic weekly report' }
+    ]);
+    assert.equal(calls, 2);
+    assert.equal(result.get('product').preferenceCategory, 'product_announcements');
+    assert.equal(result.get('report').preferenceCategory, 'newsletters');
+    assert.equal(result.get('report').action, 'read');
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('category retry is bounded and can ask one new broad question without inventing an action', async () => {
+  const previousFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return Response.json({
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: {
+            content: JSON.stringify({
+              decisions: [
+                {
+                  id: 'email_1',
+                  decision:
+                    calls === 1
+                      ? {
+                          action: 'keep',
+                          confidence: 1,
+                          reason: 'Unclear category',
+                          preferenceCategory: 'unknown',
+                          categoryConfidence: 0
+                        }
+                      : {
+                          requestPreference: {
+                            category: 'topic_routine_service_notices',
+                            question: 'How should I handle routine service notices?',
+                            reason: 'These include welcome messages and usage summaries.'
+                          }
+                        }
+                }
+              ]
+            })
+          }
+        }
+      ]
+    });
+  };
+  try {
+    const result = await modelDecisionBatch({ aiKey: 'synthetic-only' }, 'Use saved topic preferences.', [
+      { id: 'welcome' }
+    ]);
+    assert.equal(calls, 2);
+    assert.equal(result.get('welcome').requestPreference.category, 'topic_routine_service_notices');
+    assert.equal(result.get('welcome').action, undefined);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test('duplicate and missing batch entries keep only affected messages; unknown ids cannot authorize writes', async () => {
   const originalFetch = globalThis.fetch;
   const decision = { action: 'read', confidence: 0.99, reason: 'Low-priority promotion' };
