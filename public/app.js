@@ -80,6 +80,7 @@ function setBusy(value, button, label) {
     '#review-cleanup',
     '#routine-button',
     '#disconnect-button',
+    '#logout-button',
     '#confirm-disconnect'
   ]) {
     const el = $(selector);
@@ -145,6 +146,7 @@ function renderRules() {
     ? `Connected as ${state.email}`
     : 'Connect Gmail to save your preferences.';
   $('#disconnect-button').hidden = !state.connected;
+  $('#logout-button').hidden = !state.connected;
 }
 function renderActivity() {
   const renderRun = run => {
@@ -332,6 +334,12 @@ function rulesInput() {
 $$('[data-page]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.page)));
 $$('[data-goto]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.goto)));
 $('#account-button').addEventListener('click', () => (state?.connected ? showPage('rules') : connect()));
+$('#logout-button').addEventListener('click', event =>
+  operation(event.target, 'Logging out…', async () => {
+    await request('/api/logout', {});
+    location.assign('/');
+  })
+);
 $('#routine-button').addEventListener('click', () => {
   showPage('rules');
   $('#preferences-form').closest('details').open = true;

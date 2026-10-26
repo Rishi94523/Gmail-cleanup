@@ -257,6 +257,7 @@ test('OAuth uses state and PKCE and callback rejects missing or foreign state wi
   const location = new URL(start.headers.get('location'));
   assert.equal(location.hostname, 'accounts.google.com');
   assert.equal(location.searchParams.get('access_type'), 'offline');
+  assert.equal(location.searchParams.get('prompt'), 'consent select_account');
   assert.equal(location.searchParams.get('code_challenge_method'), 'S256');
   assert.ok(location.searchParams.get('state'));
   const callback = await call('/auth/google/callback?state=forged&code=fake', { headers: { Cookie: cookie } });
@@ -301,6 +302,38 @@ test('session cookies resolve, write routes reject cross-origin or missing CSRF,
     );
     assert.equal((await call(path, { headers: { Cookie: cookie } })).status, 405);
   }
+});
+
+test('logout clears only the browser session and preserves the connected account and daily routine', async t => {
+  const { call, app } = await setup(t, true);
+  const status = await call('/api/status');
+  const cookie = status.headers.get('set-cookie').split(';')[0];
+  const { csrf } = await status.json();
+  const id = 'logout@example.invalid';
+  app.store.run(
+    'INSERT INTO accounts(id,email,tokens,rules,created) VALUES(?,?,?,?,?)',
+    id,
+    id,
+    app.service.crypto.seal({ refresh_token: 'fixture' }),
+    JSON.stringify({ ...DEFAULT_RULES, daily: true }),
+    Date.now()
+  );
+  app.store.run('UPDATE sessions SET account_id=?', id);
+  assert.equal((await call('/api/logout', { headers: { Cookie: cookie } })).status, 405);
+  const post = headers =>
+    call('/api/logout', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json', ...headers },
+      body: '{}'
+    });
+  assert.equal((await post({ Origin: 'http://localhost:3000' })).status, 403);
+  const response = await post({ Origin: 'http://localhost:3000', 'X-CSRF-Token': csrf });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('set-cookie'), /Max-Age=0/i);
+  assert.equal((await (await call('/api/status', { headers: { Cookie: cookie } })).json()).connected, false);
+  const account = app.store.get('SELECT rules,tokens FROM accounts WHERE id=?', id);
+  assert.equal(JSON.parse(account.rules).daily, true);
+  assert.equal(app.service.crypto.open(account.tokens).refresh_token, 'fixture');
 });
 
 test('disconnect removes account data when Google already revoked the token, but keeps it when revocation fails', async t => {

@@ -255,6 +255,17 @@ try {
     /Nebius|Token Factory|OpenRouter|fixture-model|API_KEY|README|\.env\b/i
   );
   assert.equal(await page.locator('#agent-start').isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: 'Log out', exact: true }).isVisible(), true);
+  let loggedOut = false;
+  await page.route('**/api/logout', async route => {
+    assert.equal(route.request().method(), 'POST');
+    assert.equal(route.request().headers()['x-csrf-token'], state.csrf);
+    loggedOut = true;
+    await route.fulfill({ json: { success: true } });
+  });
+  await page.getByRole('button', { name: 'Log out', exact: true }).click();
+  await page.waitForURL('http://localhost:3070/');
+  assert.equal(loggedOut, true);
   assert.deepEqual(errors, []);
   console.log(
     'PASS automatic discovery using saved onboarding consent, persistent MCQ tray, answering and editing learned preferences, desktop/mobile layout, provider consent, paid-only daily controls, exhaustion controls, and streamed decisions. Gmail and AI were test fixtures; no live email actions.'

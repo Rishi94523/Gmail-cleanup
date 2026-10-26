@@ -223,7 +223,7 @@ export async function createApp(options = {}) {
           response_type: 'code',
           scope: 'https://www.googleapis.com/auth/gmail.modify',
           access_type: 'offline',
-          prompt: 'consent',
+          prompt: 'consent select_account',
           state,
           code_challenge: createHash('sha256').update(verifier).digest('base64url'),
           code_challenge_method: 'S256'
