@@ -85,7 +85,6 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
       const state = getState();
       await request('/api/rules', {
         ...state.rules,
-        daily: false,
         aiEnabled: false,
         agent: {
           ...state.rules.agent,
@@ -158,9 +157,12 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
     const tray = await request('/api/agent/questions');
     const memories = tray.memories.filter(m => m.scope.kind === 'category');
     const labels = { keep: 'Keep in inbox', read: 'Mark as read', archive: 'Archive', both: 'Read & archive' };
+    const pages = Math.max(1, Math.ceil(memories.length / 3));
+    reviewPage = Math.min(reviewPage, pages - 1);
+    const lastPage = reviewPage === pages - 1;
     const visible = memories.slice(reviewPage * 3, reviewPage * 3 + 3);
     render(
-      `<p class="ob-kicker">A DIFFERENT CHOICE FOR EACH TOPIC</p><h1>Your preferences, ready.</h1><p class="ob-copy">Each topic follows its own action. Important, uncertain, and unclassified mail stays.</p><div class="ob-topic-summary">${
+      `<p class="ob-kicker">REVIEW YOUR PREFERENCES · ${reviewPage + 1} OF ${pages}</p><h1>Your preferences, ready.</h1><p class="ob-copy">Each topic follows its own action. Important, uncertain, and unclassified mail stays.</p><div class="ob-topic-summary">${
         visible.length
           ? visible
               .map(
@@ -176,7 +178,7 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
               )
               .join('')
           : '<p class="ob-detail">No topic preferences yet. The agent will leave uncertain mail untouched.</p>'
-      }</div>${memories.length > 3 ? `<div class="ob-pagination"><button type="button" id="ob-prev" ${reviewPage === 0 ? 'disabled' : ''}>Previous topics</button><span>${reviewPage + 1} / ${Math.ceil(memories.length / 3)}</span><button type="button" id="ob-next" ${(reviewPage + 1) * 3 >= memories.length ? 'disabled' : ''}>Next topics</button></div>` : ''}<button class="primary ob-primary" id="ob-start">${getState().access?.used ? `Clean remaining ${getState().access.remaining}` : 'Clean my first 100'} →</button><p class="ob-detail">Nothing deleted. Changes can be undone.</p>`
+      }</div><div class="ob-review-navigation">${reviewPage > 0 ? '<button type="button" class="secondary" id="ob-prev">Previous preferences</button>' : ''}${lastPage ? '<button class="primary ob-primary" id="ob-start">Add final instructions →</button>' : '<button class="primary ob-primary" type="button" id="ob-next">Next preferences →</button>'}</div><p class="ob-detail">${lastPage ? 'All preference pages reviewed. Next, add any final instructions.' : 'Review every preference page before adding final instructions.'} Nothing is deleted.</p>`
     );
     panel.querySelectorAll('select').forEach(select => {
       select.onchange = async () => {
@@ -209,8 +211,7 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
         reviewPage++;
         review().catch(fail);
       };
-    panel.querySelector('#ob-start').textContent = 'One last thing →';
-    panel.querySelector('#ob-start').onclick = finalNotes;
+    if (lastPage) panel.querySelector('#ob-start').onclick = finalNotes;
   }
   function finalNotes() {
     render(
@@ -245,7 +246,7 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
         ...(categories.has('job_opportunities') ? { keepJobs: categories.get('job_opportunities') === 'keep' } : {}),
         ...(categories.has('newsletters') ? { keepNewsletters: categories.get('newsletters') === 'keep' } : {})
       };
-      await request('/api/rules', { ...state.rules, agent, daily: false, aiEnabled: false });
+      await request('/api/rules', { ...state.rules, agent, aiEnabled: false });
       await refresh();
       await startAgent(event => {
         if (event.type === 'stage') panel.querySelector('.ob-thinking-line').textContent = event.message;

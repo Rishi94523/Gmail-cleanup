@@ -484,11 +484,7 @@ refresh(true)
     if (
       state.connected &&
       (state.access?.recoveryAvailable ||
-        ((state.access?.remaining ?? 1) > 0 &&
-          (state.access?.recovering ||
-            !state.rules.agent?.enabled ||
-            (auth === 'connected' && !state.access?.used) ||
-            (state.runs[0]?.status === 'needs_review' && !state.runs[0]?.changed))))
+        ((state.access?.remaining ?? 1) > 0 && (state.access?.recovering || !state.rules.agent?.enabled)))
     ) {
       $('#notice-banner').hidden = true;
       await onboarding.open();

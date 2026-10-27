@@ -717,3 +717,18 @@ body.onboarding-open > #toast {
     max-height: 170px;
   }
 }
+
+.ob-review-navigation {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 20px;
+}
+.ob-review-navigation .ob-primary {
+  margin: 0;
+}
+.ob-review-navigation button {
+  min-height: 44px;
+}

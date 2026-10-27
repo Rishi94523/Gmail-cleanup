@@ -43,10 +43,20 @@ export async function jsonFetch(url, options = {}) {
   const response = await fetch(url, { ...options, signal: AbortSignal.timeout(20000) });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
+    const needsReconnect = response.status === 401 || result.error === 'invalid_grant';
+    const knownErrors = new Set([
+      'invalid_grant',
+      'invalid_client',
+      'invalid_request',
+      'unauthorized_client',
+      'access_denied'
+    ]);
     console.warn(
       JSON.stringify({
         event: 'gmail_request_failed',
         status: response.status,
+        api: new URL(url).hostname === 'oauth2.googleapis.com' ? 'oauth' : 'gmail',
+        reason: knownErrors.has(result.error) ? result.error : 'request_rejected',
         throttled:
           response.status === 429 ||
           (result.error?.errors || []).some(error =>
@@ -55,11 +65,15 @@ export async function jsonFetch(url, options = {}) {
       })
     );
     const error = new Error(
-      response.status === 401 || result.error === 'invalid_grant'
+      needsReconnect
         ? 'Gmail connection expired. Please reconnect.'
         : `Provider request failed (${response.status}). Try again later.`
     );
     error.status = response.status;
+    if (needsReconnect) {
+      error.publicCode = 'GMAIL_AUTH';
+      error.publicMessage = 'Your Gmail connection expired. Reconnect Gmail before continuing.';
+    }
     throw error;
   }
   return result;

@@ -280,6 +280,9 @@ try {
   assert.equal(ran, false);
   await check('permission');
   assert.equal(await page.locator('.ob-topic-row').count(), 3);
+  assert.equal(await page.locator('#ob-start').count(), 0, 'Cannot skip unread preference pages');
+  assert.equal(await page.locator('#ob-notes').count(), 0);
+  assert.equal(await page.locator('#ob-next.primary').count(), 1);
   await page.locator('#ob-next').click();
   await page.locator('[aria-label="Action for Community discussions"]').waitFor();
   await check('more-topics');
@@ -287,6 +290,8 @@ try {
   await page.locator('[aria-label="Action for product announcements"]').waitFor();
   assert.equal(await page.locator('[aria-label="Action for product announcements"]').inputValue(), 'archive');
   assert.equal(await page.locator('[aria-label="Action for newsletters"]').inputValue(), 'read');
+  assert.equal(await page.locator('#ob-start').count(), 0, 'Going back must still lead through the next page');
+  await page.locator('#ob-next').click();
   await page.locator('#ob-start').click();
   await page.getByRole('heading', { name: 'Anything else we should know?' }).waitFor();
   assert.equal(ran, false);
@@ -432,6 +437,22 @@ try {
     );
     await page.locator('.legacy-settings').screenshot({ path: `${output}/advanced-${width}.png` });
   }
+  // Reconnecting a configured account in unrestricted mode must not replay setup,
+  // run discovery, reset its daily routine, or automatically retry a failed run.
+  state.access = { tier: 'hackathon', used: 0, remaining: 100, dailyAllowed: true };
+  state.rules.daily = true;
+  state.rules.agent.enabled = true;
+  state.rules.agent.consent = true;
+  state.rules.agent.consentProvider = state.aiProvider;
+  state.runs = [{ status: 'needs_review', changed: 0, created: Date.now(), kind: 'cleanup' }];
+  learned = false;
+  ran = false;
+  await page.goto('http://localhost:3071/app?auth=connected');
+  await page.waitForFunction(() => !document.body.classList.contains('booting'));
+  assert.equal(await page.locator('#onboarding').isVisible(), false);
+  assert.equal(learned, false, 'Reconnect must not trigger discovery again');
+  assert.equal(ran, false, 'Reconnect must not retry cleanup automatically');
+  assert.equal(state.rules.daily, true, 'Reconnect preserves the saved daily routine');
   state.access = { ...state.access, tier: 'free', used: 100, remaining: 0, recoveryAvailable: true };
   state.runs = [{ status: 'completed', changed: 0, created: Date.now(), kind: 'cleanup' }];
   await page.reload();
