@@ -40,7 +40,7 @@ if (-not $buckets) { Invoke-Gcloud storage buckets create "gs://$sourceBucket" -
 Invoke-Gcloud storage buckets add-iam-policy-binding "gs://$sourceBucket" --member="serviceAccount:$buildAccount" --role=roles/storage.objectViewer --project=$ProjectId --quiet
 Invoke-Gcloud artifacts repositories add-iam-policy-binding gmail-cleanup --location=$Region --project=$ProjectId --member="serviceAccount:$buildAccount" --role=roles/artifactregistry.writer --quiet
 Invoke-Gcloud projects add-iam-policy-binding $ProjectId --member="serviceAccount:$buildAccount" --role=roles/logging.logWriter --condition=None --quiet
-$imageTag = Get-Date -AsUTC -Format 'yyyyMMdd-HHmmss'
+$imageTag = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
 Invoke-Gcloud builds submit . --config=deploy/cloudbuild.yaml --project=$ProjectId --service-account="projects/$ProjectId/serviceAccounts/$buildAccount" --gcs-source-staging-dir="gs://$sourceBucket/source" "--substitutions=_REGION=$Region,_IMAGE_TAG=$imageTag"
 $image = "${Region}-docker.pkg.dev/${ProjectId}/gmail-cleanup/web:${imageTag}"
 & node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/deploy-secrets.mjs $ProjectId
