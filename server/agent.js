@@ -144,9 +144,15 @@ export async function modelDecision(config, instruction, data) {
     [ASK_PREFERENCE_TOOL]
   );
 }
+// Mail that fits no saved topic is judged by the model against the user's
+// general action ("When an email doesn't matter"); it needs this confidence.
+export const GENERAL_ACTION_CONFIDENCE = 0.95;
+// Bump when decision logic changes so earlier "keep" assessments are redone.
+export const AGENT_DECISION_VERSION = 2;
+
 export const AGENT_DECISION_INSTRUCTION =
   'Use the supplied currentClock, receivedAt and ageDays. Follow written instructions. Apply an email-age restriction only when that topic explicitly has minAgeDays; compare receivedAt to the supplied currentClock/now, never to when a preference was saved. Without an explicit age condition, both older and newer emails follow the saved preference. Only a matching bank_transactions/security_notices preference with minAgeDays at least 30 can permit routine old bank or login notices. Return routineNotice:true only for clearly routine historical confirmations with no unresolved issue. Keep recent, suspicious, fraudulent, medical/legal, or uncertain alerts. Ask a broad age-based question if the preference is missing; never unsubscribe from transaction/security notices. ' +
-  'Use userContext to understand interests, never to invent cleanup permissions. Follow written conditions in categoryPreferences; if any condition or sender exception is unclear, keep the email. Decide whether this email matters NOW using user preferences and explicit learnedPreference. Explicit topic preferences override broad keepJobs/keepNewsletters defaults for low-priority mail. A topic may keep, mark read, archive, or both independently of other topics. Keep jobs/recruiting/interviews/relevant LinkedIn when keepJobs=true and there is no explicit topic preference. Cold outreach: all keeps all; exceptional keeps clearly relevant opportunities based on interests; none permits clearing unsolicited pitches. Keep wanted blogs/newsletters, known people, exceptions, personal, medical, legal, time-sensitive or uncertain mail, and current or unresolved financial/security matters. Old routine bank/login confirmations may follow explicit matching age-based saved preferences; return routineNotice=true only when clearly routine and historical. Classify preferenceCategory from preferenceCategories and return categoryConfidence. Apply categoryPreferences across senders; explicit sender/domain exceptions take precedence over general category preferences. A user exception may keep or mark read Apple announcements even when the general product-announcement preference differs. If a broad category preference is missing, call ask_preference with its category. Never ask per-product or per-sender questions. Do not re-ask answered categories; keep uncertain messages instead. Never infer that every list is unwanted from the existence of unsubscribe headers. User-approved autoUnsubscribe may remove only clearly unwanted pure product marketing, never OTPs, transactional mail, intentional newsletters, or mixed-purpose lists. Choose keep, the permitted cleanup action, or unsubscribe only with autoUnsubscribe=true. Return JSON {"action":"keep|read|archive|both|unsubscribe","confidence":0.0,"reason":"short reason","preferenceCategory":"one allowed category or unknown","categoryConfidence":0.0,"emailType":"marketing|newsletter|transactional|personal|recruiting|unknown","subscriptionIntent":"wanted|unwanted|unknown","routineNotice":false,"historyTypes":[{"id":"provided history id","type":"marketing|newsletter|transactional|unknown"}]}. Incomplete text or uncertain user intent must be kept or asked about, not acted on.';
+  'Use userContext to understand interests, never to invent cleanup permissions. Follow written conditions in categoryPreferences; if any condition or sender exception is unclear, keep the email. Decide whether this email matters NOW using user preferences and explicit learnedPreference. Explicit topic preferences override broad keepJobs/keepNewsletters defaults for low-priority mail. A topic may keep, mark read, archive, or both independently of other topics. Keep jobs/recruiting/interviews/relevant LinkedIn when keepJobs=true and there is no explicit topic preference. Cold outreach: all keeps all; exceptional keeps clearly relevant opportunities based on interests; none permits clearing unsolicited pitches. Keep wanted blogs/newsletters, known people, exceptions, personal, medical, legal, time-sensitive or uncertain mail, and current or unresolved financial/security matters. Old routine bank/login confirmations may follow explicit matching age-based saved preferences; return routineNotice=true only when clearly routine and historical. Classify preferenceCategory from preferenceCategories and return categoryConfidence. Apply categoryPreferences across senders; explicit sender/domain exceptions take precedence over general category preferences. A user exception may keep or mark read Apple announcements even when the general product-announcement preference differs. If a broad category preference is missing, call ask_preference with its category. When no saved or standard topic fits, judge the email yourself instead of asking: clearly low-priority mail such as promotions, product marketing, welcome/onboarding, credit or usage reminders, generic digests and routine account notices with nothing left to do may take preferences.action (this also applies when topicActions=true), with preferenceCategory unknown and an honest confidence. Never ask per-product or per-sender questions. Do not re-ask answered categories; keep uncertain messages instead. Never infer that every list is unwanted from the existence of unsubscribe headers. User-approved autoUnsubscribe may remove only clearly unwanted pure product marketing, never OTPs, transactional mail, intentional newsletters, or mixed-purpose lists. Choose keep, the permitted cleanup action, or unsubscribe only with autoUnsubscribe=true. Return JSON {"action":"keep|read|archive|both|unsubscribe","confidence":0.0,"reason":"short reason","preferenceCategory":"one allowed category or unknown","categoryConfidence":0.0,"emailType":"marketing|newsletter|transactional|personal|recruiting|unknown","subscriptionIntent":"wanted|unwanted|unknown","routineNotice":false,"historyTypes":[{"id":"provided history id","type":"marketing|newsletter|transactional|unknown"}]}. Incomplete text or uncertain user intent must be kept or asked about, not acted on.';
 
 export async function modelDecisionBatch(config, instruction, items, { retryUnclassified = true } = {}) {
   // Short request-local aliases prevent confusion with IDs inside preference
@@ -204,7 +210,7 @@ export async function modelDecisionBatch(config, instruction, items, { retryUncl
       const repaired = await modelDecisionBatch(
         config,
         instruction +
-          '\nCATEGORY CLARIFICATION PASS: These messages did not have a usable category in the first pass. Read the actual email and saved preferences again. Do not copy unknown or a zero confidence from the schema. Match a saved broad topic only when its meaning fits. Recurring service performance reports can be newsletters/digests; feature, terms and pricing announcements can be product announcements; career-tool promotions are not recruiting. These are examples, not mandatory classifications. Routine welcome/onboarding or account-usage notices may need a new broad topic rather than being forced into an existing one. When no saved topic fits a clearly low-priority recurring pattern, return requestPreference with a reusable topic_ category and a natural question. Never ask per sender, never invent cleanup permission, and keep genuinely personal, unresolved, sensitive or ambiguous content. Return a complete decision for each supplied id.',
+          '\nCATEGORY CLARIFICATION PASS: These messages did not have a usable category in the first pass. Read the actual email and saved preferences again. Do not copy unknown or a zero confidence from the schema. Match a saved broad topic only when its meaning fits. Recurring service performance reports can be newsletters/digests; feature, terms and pricing announcements can be product announcements; career-tool promotions are not recruiting. These are examples, not mandatory classifications. Routine welcome/onboarding or account-usage notices may need a new broad topic rather than being forced into an existing one. When no saved topic fits but the email is clearly low priority, decide it with preferences.action and preferenceCategory unknown instead of asking. Return requestPreference with a reusable topic_ category only when the right handling genuinely depends on personal preference. Never ask per sender, never invent cleanup permission, and keep genuinely personal, unresolved, sensitive or ambiguous content. Return a complete decision for each supplied id.',
         retry,
         { retryUnclassified: false }
       );
@@ -225,7 +231,7 @@ export function decisionFor(raw, p) {
   )
     return { action: 'keep', reason: 'Uncertain AI response' };
   // Self-reported confidence is a conservative gate, not a measured accuracy guarantee.
-  if (raw.action === 'keep' || raw.confidence < (p.explicitTopicAction ? 0.9 : 0.98))
+  if (raw.action === 'keep' || raw.confidence < (p.explicitTopicAction ? 0.9 : GENERAL_ACTION_CONFIDENCE))
     return { action: 'keep', reason: raw.action === 'keep' ? raw.reason.slice(0, 240) : 'Uncertain; left in inbox' };
   if (!(p.action === 'both' ? ['read', 'archive', 'both'] : [p.action]).includes(raw.action))
     return { action: 'keep', reason: 'Suggested action exceeds your permission' };
@@ -504,6 +510,7 @@ export async function runAgent(
       JSON.stringify({
         primaryScope: PRIMARY_SCOPE_VERSION,
         application: 'all-eligible-messages-v2',
+        version: AGENT_DECISION_VERSION,
         rules: assessmentRules(account.rules),
         userContext: learnedCategories.notes,
         topicPreferences: learnedCategories.memories.map(m => ({ id: m.id, version: m.version })),
@@ -803,16 +810,8 @@ export async function runAgent(
       const memory = exception
         ? { action: exception.action, scope: { kind: 'exception' } }
         : specificMemory || categoryMemory;
-      if (
-        !protect &&
-        !classified &&
-        !exception &&
-        !specificMemory &&
-        (learnedCategories.memories.length || learnedCategories.questions.length)
-      ) {
-        await holdEmail(service, id, message.id, scope);
-        protect = 'Uncertain category; left unchanged to respect your general preferences';
-      }
+      // Mail that fits no topic is not held: it falls through to the model's own
+      // judgement against the general action, behind the confidence gate below.
       const pending = classified ? learnedCategories.questions.find(q => q.scope_hash === broadScope.scopeHash) : null;
       if (!protect && pending && !exception && !specificMemory) {
         await holdEmail(service, id, message.id, broadScope, pending.id);
@@ -872,8 +871,9 @@ export async function runAgent(
       } else if (
         !protect &&
         !memory &&
-        ((typeof raw?.confidence === 'number' && raw.confidence >= 0 && raw.confidence < 0.98) ||
-          (scope.listId &&
+        ((typeof raw?.confidence === 'number' && raw.confidence >= 0 && raw.confidence < GENERAL_ACTION_CONFIDENCE) ||
+          (classified &&
+            scope.listId &&
             raw?.subscriptionIntent === 'unknown' &&
             ['marketing', 'newsletter'].includes(raw?.emailType)))
       )
@@ -882,7 +882,9 @@ export async function runAgent(
           question: 'How should I handle this category?',
           reason: 'Your preferences do not make the intent clear enough to act.'
         });
-      if (p.topicActions && !memory && !['keep', 'unsubscribe'].includes(result.action))
+      // A recognised topic without a saved action waits for its question; mail
+      // that fits no topic may use the general action chosen by the model.
+      if (p.topicActions && !memory && classified && !['keep', 'unsubscribe'].includes(result.action))
         result = { action: 'keep', reason: 'No saved action for this topic; left unchanged' };
       const approvedOlderNotice =
         sensitive &&

@@ -10,7 +10,7 @@ A Gmail agent that learns what matters to you, then marks low-priority email as 
 2. The agent learns from subjects, senders and dates in your latest **100 unread Primary emails** and asks a few broad preference questions.
 3. Choose keep, mark read, archive, both, or write your own answer—independently for each topic.
    A final **“Anything else we should know?”** step accepts extra instructions or background before cleanup. The agent previews written preferences for confirmation; you can also skip it.
-4. During cleanup, the model reads email text and makes decisions using those preferences. Important or uncertain emails stay unchanged. **Nothing is deleted.**
+4. During cleanup, the model reads email text and makes decisions using those preferences. Clearly low-priority mail that fits none of your topics (promotions, welcome emails, credit reminders) still gets your general “When an email doesn’t matter” action when the model is confident. Important or uncertain emails stay unchanged. **Nothing is deleted.**
 5. Unclear patterns become questions in your workspace. Answering saves the preference and immediately rechecks only the emails held for that question. Both manual and daily cleanup apply current preferences to older and newer emails; only explicit topic-specific age conditions restrict age. Unanswered questions stay protected. You can edit preferences and sender exceptions later.
 6. Enable a daily routine with your time and timezone, or run cleanup manually. Pause daily runs for 1 day, 1 week, 1 month (30 days), or until you resume. Timed pauses expire automatically and manual cleanup remains available. The hackathon edition includes repeat runs and daily cleanup, with up to 100 Primary emails per run.
 

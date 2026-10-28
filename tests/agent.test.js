@@ -387,8 +387,43 @@ test('topic actions stay independent; a topic may archive while another only mar
   assert.ok(f.mails.get('noise').labelIds.includes('UNREAD'));
   assert.ok(f.mails.get('person').labelIds.includes('INBOX'));
   assert.ok(!f.mails.get('person').labelIds.includes('UNREAD'));
-  assert.ok(f.mails.get('uncertain').labelIds.includes('UNREAD'));
+  // Fits no topic: the model's confident judgement uses the general action (read).
+  assert.ok(!f.mails.get('uncertain').labelIds.includes('UNREAD'));
   assert.ok(f.mails.get('uncertain').labelIds.includes('INBOX'));
+});
+
+test('mail fitting no saved topic is judged with the general action instead of being silently held', async t => {
+  const f = fixture(t, { topicActions: true, keepPeople: false, action: 'read' });
+  f.store.run(
+    'INSERT INTO preference_memories(id,account_id,scope_hash,payload,updated) VALUES(?,?,?,?,?)',
+    'newsletters',
+    f.id,
+    'category:newsletters',
+    f.crypto.seal({
+      scope: { kind: 'category', category: 'newsletters', scopeHash: 'category:newsletters' },
+      action: 'read',
+      effectiveFrom: 0
+    }),
+    Date.now()
+  );
+  const decisions = {
+    noise: { action: 'read', confidence: 0.96, reason: 'Welcome email with nothing to do' },
+    person: { action: 'read', confidence: 0.9, reason: 'Probably a promotion' },
+    uncertain: { action: 'archive', confidence: 0.99, reason: 'Product marketing' }
+  };
+  const infer = async (config, prompt, input) => ({
+    ...decisions[input.sender.split('@')[0]],
+    preferenceCategory: 'unknown',
+    categoryConfidence: 0
+  });
+  await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard, undefined, 'manual', infer));
+  assert.ok(!f.mails.get('noise').labelIds.includes('UNREAD'), 'Confident general judgement marks read');
+  assert.ok(f.mails.get('noise').labelIds.includes('INBOX'));
+  assert.ok(f.mails.get('person').labelIds.includes('UNREAD'), 'Below the confidence gate stays unchanged');
+  assert.ok(f.mails.get('uncertain').labelIds.includes('INBOX'), 'Archive exceeds the general read permission');
+  assert.ok(f.mails.get('uncertain').labelIds.includes('UNREAD'));
+  assert.equal(f.store.get('SELECT count(*) AS n FROM agent_holds').n, 0, 'No silent holds without a question');
+  assert.equal(f.store.get('SELECT count(*) AS n FROM agent_questions').n, 0);
 });
 
 test('discovery can invent an evidence-backed broad topic outside the examples', async t => {
