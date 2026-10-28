@@ -144,11 +144,18 @@ export async function modelDecision(config, instruction, data) {
     [ASK_PREFERENCE_TOOL]
   );
 }
-// Mail that fits no saved topic is judged by the model against the user's
-// general action ("When an email doesn't matter"); it needs this confidence.
-export const GENERAL_ACTION_CONFIDENCE = 0.95;
+// Self-reported confidence gates, calibrated to Nemotron 3.5 Super, which rates
+// clear-cut decisions around 0.75–0.9 rather than near 1. Every action here is
+// reversible (read/archive); unsubscribe keeps its own much stricter gate.
+// Category match needed to apply a saved topic:
+export const TOPIC_MATCH_CONFIDENCE = 0.8;
+// Decision confidence needed to apply a matching saved topic action:
+export const TOPIC_ACTION_CONFIDENCE = 0.8;
+// Mail that fits no saved topic is judged against the user's general action
+// ("When an email doesn't matter") and needs this confidence:
+export const GENERAL_ACTION_CONFIDENCE = 0.75;
 // Bump when decision logic changes so earlier "keep" assessments are redone.
-export const AGENT_DECISION_VERSION = 2;
+export const AGENT_DECISION_VERSION = 3;
 
 export const AGENT_DECISION_INSTRUCTION =
   'Use the supplied currentClock, receivedAt and ageDays. Follow written instructions. Apply an email-age restriction only when that topic explicitly has minAgeDays; compare receivedAt to the supplied currentClock/now, never to when a preference was saved. Without an explicit age condition, both older and newer emails follow the saved preference. Only a matching bank_transactions/security_notices preference with minAgeDays at least 30 can permit routine old bank or login notices. Return routineNotice:true only for clearly routine historical confirmations with no unresolved issue. Keep recent, suspicious, fraudulent, medical/legal, or uncertain alerts. Ask a broad age-based question if the preference is missing; never unsubscribe from transaction/security notices. ' +
@@ -202,7 +209,7 @@ export async function modelDecisionBatch(config, instruction, items, { retryUncl
       return (
         !categoryScope(decision?.preferenceCategory) ||
         typeof decision?.categoryConfidence !== 'number' ||
-        decision.categoryConfidence < 0.9 ||
+        decision.categoryConfidence < TOPIC_MATCH_CONFIDENCE ||
         decision.categoryConfidence > 1
       );
     });
@@ -231,7 +238,10 @@ export function decisionFor(raw, p) {
   )
     return { action: 'keep', reason: 'Uncertain AI response' };
   // Self-reported confidence is a conservative gate, not a measured accuracy guarantee.
-  if (raw.action === 'keep' || raw.confidence < (p.explicitTopicAction ? 0.9 : GENERAL_ACTION_CONFIDENCE))
+  if (
+    raw.action === 'keep' ||
+    raw.confidence < (p.explicitTopicAction ? TOPIC_ACTION_CONFIDENCE : GENERAL_ACTION_CONFIDENCE)
+  )
     return { action: 'keep', reason: raw.action === 'keep' ? raw.reason.slice(0, 240) : 'Uncertain; left in inbox' };
   if (!(p.action === 'both' ? ['read', 'archive', 'both'] : [p.action]).includes(raw.action))
     return { action: 'keep', reason: 'Suggested action exceeds your permission' };
@@ -801,7 +811,7 @@ export async function runAgent(
         broadScope &&
         (raw?.requestPreference ||
           (typeof raw?.categoryConfidence === 'number' &&
-            raw.categoryConfidence >= 0.9 &&
+            raw.categoryConfidence >= TOPIC_MATCH_CONFIDENCE &&
             raw.categoryConfidence <= 1));
       const exception = matchingException(p.exceptionsRules, sender, classified ? broadScope.category : null);
       const categoryMemory = classified

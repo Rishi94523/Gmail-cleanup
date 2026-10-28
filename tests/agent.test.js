@@ -408,7 +408,7 @@ test('mail fitting no saved topic is judged with the general action instead of b
   );
   const decisions = {
     noise: { action: 'read', confidence: 0.96, reason: 'Welcome email with nothing to do' },
-    person: { action: 'read', confidence: 0.9, reason: 'Probably a promotion' },
+    person: { action: 'read', confidence: 0.7, reason: 'Probably a promotion' },
     uncertain: { action: 'archive', confidence: 0.99, reason: 'Product marketing' }
   };
   const infer = async (config, prompt, input) => ({
