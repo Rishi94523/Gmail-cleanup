@@ -369,7 +369,12 @@ export async function learnInbox(service, id, consent, provider) {
       if (
         !cited ||
         !newTopicScope(question.category) ||
-        agentProtection(source.get(question.messageId), account.rules, { allowOlderNotices: true })
+        // source only holds messages confirmPrimaryInbox accepted, so a
+        // CATEGORY_UPDATES label must not drop the question as outside Primary.
+        agentProtection(source.get(question.messageId), account.rules, {
+          allowOlderNotices: true,
+          primaryVerified: true
+        })
       )
         return false;
       const text = `${cited.sender || ''} ${cited.subject || ''} ${cited.listId || ''}`.toLowerCase();

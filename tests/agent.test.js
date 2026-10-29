@@ -475,6 +475,57 @@ test('discovery can invent an evidence-backed broad topic outside the examples',
   }
 });
 
+test('discovery asks about Primary mail that also carries the Updates label', async t => {
+  const f = fixture(t, { topicActions: true });
+  const noise = f.mails.get('noise');
+  noise.labelIds.push('CATEGORY_UPDATES');
+  noise.payload.headers.push({ name: 'Message-ID', value: '<updates@example.invalid>' });
+  noise.payload.headers.find(h => h.name === 'Subject').value = 'Your trial ends in three days';
+  const originalClient = f.service.client.bind(f.service);
+  f.service.client = account => {
+    const base = originalClient(account);
+    return async (path, ...args) =>
+      path.startsWith('messages?') && new URLSearchParams(path.split('?')[1]).get('q')?.includes('rfc822msgid:')
+        ? { messages: [{ id: 'noise' }] }
+        : base(path, ...args);
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    const id = JSON.parse(JSON.parse(options.body).messages[1].content).find(m => /trial/.test(m.subject))?.id;
+    return Response.json({
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: {
+            content: JSON.stringify({
+              summary: 'Service notices recur.',
+              questions: [
+                {
+                  messageId: id,
+                  category: 'topic_service_notices',
+                  question: 'How should I handle service notices?',
+                  reason: 'Trial reminders appear in the sample.',
+                  evidenceQuote: 'Your trial ends'
+                }
+              ]
+            })
+          }
+        }
+      ]
+    });
+  };
+  try {
+    await learnInbox(f.service, f.id, true, 'nebius');
+    const questions = f.store.all('SELECT payload FROM agent_questions').map(q => f.crypto.open(q.payload));
+    assert.deepEqual(
+      questions.map(q => q.question),
+      ['How should I handle service notices?']
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('batched agent handles 45 approved low-priority messages in five model calls and preserves security alerts', async t => {
   const f = fixture(t, { topicActions: true, keepPeople: false });
   const original = structuredClone(f.mails.get('noise'));
