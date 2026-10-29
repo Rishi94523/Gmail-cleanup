@@ -402,38 +402,16 @@ try {
     await page.screenshot({ path: `${output}/preferences-${width}.png` });
   }
   await page.locator('.legacy-settings > summary').click();
+  // The rules-only cleanup filters were removed; this section holds only the Gmail connection.
+  assert.equal(await page.locator('.legacy-settings > summary').textContent(), 'Account settings');
+  assert.equal(await page.locator('.legacy-settings fieldset, #rules-form, #save-rules').count(), 0);
+  await page.locator('#connection-settings-copy').waitFor();
   for (const width of [1440, 1024, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
-    const layout = await page.locator('.settings-main').evaluate(main =>
-      [...main.querySelectorAll('fieldset')].map(fieldset => {
-        const bounds = fieldset.getBoundingClientRect();
-        const legend = fieldset.querySelector('legend').getBoundingClientRect();
-        return {
-          title: fieldset.querySelector('legend').textContent,
-          right: bounds.right,
-          legendBottom: legend.bottom,
-          rows: [...fieldset.querySelectorAll('.check-row')].map(row => {
-            const r = row.getBoundingClientRect();
-            return { left: r.left, right: r.right, top: r.top };
-          })
-        };
-      })
-    );
-    for (const field of layout)
-      for (const row of field.rows) {
-        assert.ok(
-          row.right <= field.right + 1,
-          `Advanced ${field.title}: checkbox row escapes its fieldset at ${width}px`
-        );
-        assert.ok(
-          row.top >= field.legendBottom - 1,
-          `Advanced ${field.title}: checkbox overlaps heading at ${width}px`
-        );
-      }
     assert.equal(
       await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
       true,
-      `Advanced settings overflow at ${width}px`
+      `Account settings overflow at ${width}px`
     );
     await page.locator('.legacy-settings').screenshot({ path: `${output}/advanced-${width}.png` });
   }

@@ -35,7 +35,6 @@ try {
     rules: { ...DEFAULT_RULES, agent: { enabled: true, consent: true, consentProvider: 'nebius' } },
     runs: [],
     subscriptions: [],
-    plan: null,
     totals: {}
   };
   let learned = false;

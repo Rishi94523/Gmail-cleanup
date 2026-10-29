@@ -1,17 +1,7 @@
 import { accessFor, requirePaid } from './access.js';
 import { randomUUID } from 'node:crypto';
-import {
-  validateRules,
-  gmailQuery,
-  headersOf,
-  senderAddress,
-  protectedReason,
-  changesFor,
-  undoChanges,
-  dailyKey,
-  dailyIsPaused
-} from './rules.js';
-import { gmailClient, metadata, mapLimit, classify } from './gmail.js';
+import { validateRules, headersOf, senderAddress, undoChanges, dailyKey, dailyIsPaused } from './rules.js';
+import { gmailClient, metadata, mapLimit } from './gmail.js';
 import { unsubscribeUrl, postUnsubscribe } from './security.js';
 import { preferences, runAgent } from './agent.js';
 import { missingAIKey } from './ai.js';
@@ -27,6 +17,8 @@ export class InboxService {
     this.crypto = crypto;
     this.config = config;
     this.clientFactory = clientFactory;
+    // Scheduled runs call the agent through this property so tests can observe them.
+    this.runAgent = runAgent;
   }
   async account(id) {
     const account = await this.store.get('SELECT * FROM accounts WHERE id=?', id);
@@ -85,14 +77,11 @@ export class InboxService {
     const agent = input.agent ? { ...existingAgent, ...input.agent } : existingAgent;
     const rules = {
       ...validateRules({ ...input, dailyPausedUntil: existingRules.dailyPausedUntil ?? 0 }),
-      aiConsentProvider: input.aiConsentProvider || '',
       ...(agent ? { agent: preferences(agent) } : {})
     };
-    if ((rules.agent?.enabled || rules.aiEnabled) && !this.config.aiKey) throw new Error(missingAIKey(this.config));
+    if (rules.agent?.enabled && !this.config.aiKey) throw new Error(missingAIKey(this.config));
     if (rules.agent?.enabled && rules.agent.consentProvider !== (this.config.aiProvider || 'nebius'))
       throw new Error('Confirm AI processing for the selected provider in Preferences.');
-    if (rules.aiEnabled && rules.aiConsentProvider !== (this.config.aiProvider || 'nebius'))
-      throw new Error('Confirm AI processing for the selected provider before enabling advanced AI review.');
     await this.store.transaction(async tx => {
       const updated = await tx.run(
         'UPDATE accounts SET rules=? WHERE id=? AND rules=?',
@@ -101,7 +90,6 @@ export class InboxService {
         JSON.stringify(existingRules)
       );
       if (!updated.changes) throw new Error('Settings changed in another session. Reload before saving.');
-      await tx.run("UPDATE plans SET status='expired' WHERE account_id=? AND status='ready'", id);
       // Discovery may precede the final read/archive selection. Keep unanswered
       // setup choices aligned with that permission before showing the questions.
       for (const question of await tx.all(
@@ -142,12 +130,8 @@ export class InboxService {
         row.rules
       );
       if (!updated.changes) throw new Error('Settings changed in another session. Reload before changing the pause.');
-      await tx.run("UPDATE plans SET status='expired' WHERE account_id=? AND status='ready'", id);
       return { rules };
     });
-  }
-  async scan(id, mode = 'manual', nextPlanId = null) {
-    return this.locked(id, () => this.scanUnlocked(id, mode, nextPlanId));
   }
   async recordSubscriptions(id, messages) {
     for (const message of messages) {
@@ -195,73 +179,6 @@ export class InboxService {
       return { inspected: messages.filter(Boolean).length, moreAvailable: Boolean(listed.nextPageToken) };
     });
   }
-  async scanUnlocked(id, mode, nextPlanId = null) {
-    const account = await this.account(id);
-    const gmail = this.client(account);
-    let pageToken;
-    if (nextPlanId) {
-      const previous = await this.store.get(
-        "SELECT payload FROM plans WHERE id=? AND account_id=? AND status='ready'",
-        nextPlanId,
-        id
-      );
-      if (!previous) throw new Error('Previous batch expired. Start a new scan.');
-      const previousPlan = this.crypto.open(previous.payload);
-      if (JSON.stringify(previousPlan.rules) !== JSON.stringify(account.rules) || !previousPlan.nextPageToken)
-        throw new Error('There is no next batch for these rules. Start a new scan.');
-      pageToken = previousPlan.nextPageToken;
-    }
-    const listed = await gmail(
-      `messages?${new URLSearchParams({ q: gmailQuery(account.rules), maxResults: '100', ...(pageToken ? { pageToken } : {}) })}`
-    );
-    const messages = await mapLimit(listed.messages || [], 5, async ({ id }) => {
-      try {
-        return await metadata(gmail, id);
-      } catch (error) {
-        if (error.status === 404) return null;
-        throw error;
-      }
-    });
-    const present = messages.filter(Boolean);
-    const decisions = await classify(present, account.rules, this.config);
-    const plan = {
-      id: randomUUID(),
-      rules: account.rules,
-      messages: present,
-      decisions,
-      nextPageToken: listed.nextPageToken || null,
-      moreAvailable: Boolean(listed.nextPageToken),
-      created: Date.now(),
-      mode
-    };
-    await this.store.run("UPDATE plans SET status='expired' WHERE account_id=? AND status='ready'", id);
-    await this.store.run(
-      "INSERT INTO plans(id,account_id,payload,status,created) VALUES(?,?,?,'ready',?)",
-      plan.id,
-      id,
-      this.crypto.seal(plan),
-      plan.created
-    );
-    await this.recordSubscriptions(id, present);
-    return this.planView(plan);
-  }
-  planView(plan) {
-    return {
-      id: plan.id,
-      created: plan.created,
-      moreAvailable: plan.moreAvailable,
-      decisions: plan.decisions.map(({ labels, ...decision }) => decision),
-      rules: plan.rules
-    };
-  }
-  async latestPlan(id) {
-    const row = await this.store.get(
-      "SELECT payload FROM plans WHERE account_id=? AND status='ready' AND created>? ORDER BY created DESC LIMIT 1",
-      id,
-      Date.now() - 3600000
-    );
-    return row ? this.planView(this.crypto.open(row.payload)) : null;
-  }
   async label(gmail) {
     const labels = await gmail('labels');
     const found = labels.labels?.find(l => l.name === 'Cleaned by agent');
@@ -272,107 +189,6 @@ export class InboxService {
       messageListVisibility: 'show'
     });
     return created.id;
-  }
-  async apply(id, planId, selected, mode = 'manual') {
-    return this.locked(id, guard => this.applyUnlocked(id, planId, selected, mode, guard));
-  }
-  async applyUnlocked(id, planId, selected, mode, guard) {
-    const row = await this.store.get('SELECT * FROM plans WHERE id=? AND account_id=?', planId, id);
-    if (!row || row.status !== 'ready' || Date.now() - row.created > 3600000)
-      throw new Error('This preview has expired or already been used. Scan again.');
-    const account = await this.account(id);
-    const plan = this.crypto.open(row.payload);
-    if (JSON.stringify(plan.rules) !== JSON.stringify(account.rules))
-      throw new Error('Your rules changed. Scan again to create a fresh preview.');
-    const eligible = new Set(plan.decisions.filter(d => !d.reason).map(d => d.id));
-    if (
-      !Array.isArray(selected) ||
-      selected.length > 100 ||
-      selected.some(id => typeof id !== 'string' || !eligible.has(id))
-    )
-      throw new Error('Select messages from this cleanup preview.');
-    const ids = [...new Set(selected)];
-    if (!ids.length) throw new Error('Select at least one message.');
-    const runId = randomUUID();
-    const gmail = this.client(account);
-    const claimed = await this.store.run("UPDATE plans SET status='applying' WHERE id=? AND status='ready'", planId);
-    if (!claimed.changes) throw new Error('This preview is already being applied.');
-    await this.store.run(
-      "INSERT INTO runs(id,account_id,kind,status,total,created) VALUES(?,?,?,'running',?,?)",
-      runId,
-      id,
-      mode === 'daily' ? 'daily' : 'cleanup',
-      ids.length,
-      Date.now()
-    );
-    let changed = 0;
-    let skipped = 0;
-    try {
-      const cleanedLabel = await this.label(gmail);
-      for (const messageId of ids) {
-        await guard();
-        const freshAccount = await this.account(id);
-        if (mode === 'daily' && (!freshAccount.rules.daily || dailyIsPaused(freshAccount.rules)))
-          throw new Error('Daily agent paused. Remaining messages were left unchanged.');
-        if (JSON.stringify(freshAccount.rules) !== JSON.stringify(account.rules))
-          throw new Error('Rules changed during cleanup. Remaining messages were left unchanged.');
-        let message;
-        try {
-          message = await metadata(gmail, messageId);
-        } catch (error) {
-          if (error.status === 404) {
-            skipped++;
-            continue;
-          }
-          throw error;
-        }
-        if (protectedReason(message, freshAccount.rules)) {
-          skipped++;
-          continue;
-        }
-        const beforeWrite = (await this.account(id)).rules;
-        if ((mode === 'daily' && !beforeWrite.daily) || JSON.stringify(beforeWrite) !== JSON.stringify(account.rules))
-          throw new Error('Rules changed or the agent was paused. Remaining messages were left unchanged.');
-        const change = changesFor(message, account.rules, cleanedLabel);
-        if (!change.addLabelIds.length && !change.removeLabelIds.length) {
-          skipped++;
-          continue;
-        }
-        const changeId = randomUUID();
-        await this.store.run(
-          "INSERT INTO changes(id,run_id,account_id,message_id,payload,status,created) VALUES(?,?,?,?,?,'uncertain',?)",
-          changeId,
-          runId,
-          id,
-          messageId,
-          this.crypto.seal(change),
-          Date.now()
-        );
-        // Persist before the write: a timeout/crash is uncertain and is never replayed.
-        await gmail(`messages/${encodeURIComponent(messageId)}/modify`, change);
-        await this.store.run("UPDATE changes SET status='applied' WHERE id=?", changeId);
-        changed++;
-        await this.store.run('UPDATE runs SET changed=?,skipped=? WHERE id=?', changed, skipped, runId);
-      }
-      await this.store.run(
-        "UPDATE runs SET status='completed',changed=?,skipped=? WHERE id=?",
-        changed,
-        skipped,
-        runId
-      );
-      await this.store.run("UPDATE plans SET status='applied' WHERE id=?", planId);
-      return { id: runId, changed, skipped };
-    } catch (error) {
-      await this.store.run(
-        "UPDATE runs SET status='needs_review',changed=?,skipped=?,detail=? WHERE id=?",
-        changed,
-        skipped,
-        error.message,
-        runId
-      );
-      await this.store.run("UPDATE plans SET status='needs_review' WHERE id=?", planId);
-      throw new Error(`${error.message} ${changed} messages confirmed changed; review activity before continuing.`);
-    }
   }
   async undo(id, runId) {
     return this.locked(id, async guard => {
@@ -415,7 +231,7 @@ export class InboxService {
       const gmail = this.client(await this.account(id));
       const message = await metadata(gmail, row.message_id);
       const headers = headersOf(message);
-      if (senderAddress(headers.from) !== sender) throw new Error('Sender changed. Scan again.');
+      if (senderAddress(headers.from) !== sender) throw new Error('Sender changed. Find subscriptions again.');
       const url = unsubscribeUrl(headers);
       if (!url || url.hostname !== row.host)
         throw new Error('One-click unsubscribe is no longer available. Review this sender in Gmail.');
@@ -439,12 +255,8 @@ export class InboxService {
   // Remove only data nothing reads again. Holds, assessments and uncertain
   // changes stay: they stop the agent from re-touching or re-billing a message.
   async prune(now = Date.now()) {
-    // Previews can be applied for one hour; finished ones are never reopened.
-    await this.store.run(
-      "DELETE FROM plans WHERE (status='ready' AND created<?) OR (status IN ('expired','applied','needs_review') AND created<?)",
-      now - 3600000,
-      now - 86400000
-    );
+    // Only agent logs remain in plans; this clears rows left by the removed preview flow.
+    await this.store.run("DELETE FROM plans WHERE status<>'agent_log'");
     await this.store.run(
       `DELETE FROM plans WHERE status='agent_log' AND id NOT IN (SELECT id FROM plans p WHERE p.account_id=plans.account_id AND p.status='agent_log' ORDER BY p.created DESC LIMIT ${AGENT_LOGS_KEPT})`
     );
@@ -458,7 +270,14 @@ export class InboxService {
   async daily() {
     for (const row of await this.store.all('SELECT id,rules,last_day FROM accounts')) {
       const rules = JSON.parse(row.rules);
-      if (!rules.daily || dailyIsPaused(rules) || !(await accessFor(this, row.id)).dailyAllowed) continue;
+      // Only the agent runs on a schedule; an account without it set up is skipped, not claimed.
+      if (
+        !rules.daily ||
+        !rules.agent?.enabled ||
+        dailyIsPaused(rules) ||
+        !(await accessFor(this, row.id)).dailyAllowed
+      )
+        continue;
       const day = dailyKey(rules);
       // Keys sort in time order, so a later or equal claim means this run already happened.
       if (!day || (row.last_day && row.last_day >= day)) continue;
@@ -469,25 +288,13 @@ export class InboxService {
             !latest ||
             (latest.last_day && latest.last_day >= day) ||
             !JSON.parse(latest.rules).daily ||
+            !JSON.parse(latest.rules).agent?.enabled ||
             dailyIsPaused(JSON.parse(latest.rules))
           )
             return;
           // Claim each scheduled run once; interrupted/failed mutations require manual review.
           await this.store.run('UPDATE accounts SET last_day=?,last_error=NULL WHERE id=?', day, row.id);
-          if (JSON.parse(latest.rules).agent?.enabled) {
-            await runAgent(this, row.id, guard, undefined, 'daily');
-            return;
-          }
-          const plan = await this.scanUnlocked(row.id, 'daily');
-          const selected = plan.decisions.filter(d => !d.reason).map(d => d.id);
-          if (selected.length) await this.applyUnlocked(row.id, plan.id, selected, 'daily', guard);
-          else
-            await this.store.run(
-              "INSERT INTO runs(id,account_id,kind,status,total,detail,created) VALUES(?,?,'daily','completed',0,'No matching messages to clean.',?)",
-              randomUUID(),
-              row.id,
-              Date.now()
-            );
+          await this.runAgent(this, row.id, guard, undefined, 'daily');
         });
       } catch (error) {
         await this.store.run('UPDATE accounts SET last_error=? WHERE id=?', error.message, row.id);

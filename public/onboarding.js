@@ -85,7 +85,6 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
       const state = getState();
       await request('/api/rules', {
         ...state.rules,
-        aiEnabled: false,
         agent: {
           ...state.rules.agent,
           enabled: false,
@@ -248,7 +247,7 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
       };
       // Daily cleanup is on by default once setup finishes; Preferences can turn it off.
       const daily = state.rules.daily || Boolean(state.access?.dailyAllowed && state.schedulerActive);
-      await request('/api/rules', { ...state.rules, agent, aiEnabled: false, daily });
+      await request('/api/rules', { ...state.rules, agent, daily });
       await refresh();
       await startAgent(event => {
         if (event.type === 'stage') panel.querySelector('.ob-thinking-line').textContent = event.message;

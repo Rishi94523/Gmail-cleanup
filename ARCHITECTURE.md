@@ -4,6 +4,8 @@ The same Node service serves the React landing page, workspace, OAuth callback a
 
 ## Agent flow
 
+The agent is the only cleanup path, and it works on unread Primary mail. Promotions, Social and the other Gmail tabs are already sorted by Gmail, so the app does not reclean them; the earlier rules-only cleanup (age/category filters with a manual preview) was removed. Scheduled runs skip accounts whose agent is not set up.
+
 - Gmail category labels are hints rather than a veto on a Primary search result. If another category label is present, discovery and cleanup confirm the exact message with a Primary/unread/inbox search scoped to its Message-ID; ambiguous or missing identities stay unchanged. Cleanup repeats the scope check before writing and still requires an unchanged Gmail history ID. The scope-check version is part of the assessment fingerprint, so skips from an older scope rule can be assessed again without deleting audit history.
 
 - Discovery freezes the initial Primary sample before cleanup. It sends header metadata in groups of 25, with two model requests at a time. Evidence-backed broad topics are deduplicated before questions are saved.
@@ -31,6 +33,6 @@ The account's rules JSON stores `dailyPausedUntil`: 0 for no pause, -1 until res
 
 OAuth tokens, discovery/sample context, learned preferences, example subscription subjects and cleanup deltas use AES-256-GCM encryption. Sessions and account data are scoped per user. CSRF checks protect browser writes; the scheduler uses its separate authenticated endpoint.
 
-Scheduler maintenance prunes data nothing reads again, at most hourly: cleanup previews once they expire or finish, agent decision logs beyond the latest 10 per account, change payloads past the 30-day undo window, and preference history older than 180 days. Runs, held messages, assessment markers and uncertain changes are kept because they prevent repeated processing or repeated model calls.
+Scheduler maintenance prunes data nothing reads again, at most hourly: rows left by the removed rules-only preview flow, agent decision logs beyond the latest 10 per account, change payloads past the 30-day undo window, and preference history older than 180 days. Runs, held messages, assessment markers and uncertain changes are kept because they prevent repeated processing or repeated model calls.
 
 Operational logs report durations, token/cache counts and failure statuses without email text, subjects or credentials. Schema changes live in versioned SQL migrations; validate them on an expiring Neon branch before production.

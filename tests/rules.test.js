@@ -1,80 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  DEFAULT_RULES,
-  validateRules,
-  protectedReason,
-  changesFor,
-  undoChanges,
-  gmailQuery,
-  dailyKey,
-  dailyHours
-} from '../server/rules.js';
+import { DEFAULT_RULES, validateRules, undoChanges, dailyKey, dailyHours } from '../server/rules.js';
 import { encryption, publicIPv4, unsubscribeUrl } from '../server/security.js';
 import { randomBytes } from 'node:crypto';
 
-const message = (overrides = {}) => ({
-  id: 'one',
-  internalDate: String(Date.now() - 150 * 86400000),
-  labelIds: ['INBOX', 'UNREAD', 'CATEGORY_PROMOTIONS'],
-  payload: {
-    headers: [
-      { name: 'From', value: 'Offers <offers@example.com>' },
-      { name: 'Subject', value: 'A summer sale' }
-    ]
-  },
-  ...overrides
+test('undo reverses exactly the labels a run added and removed', () => {
+  assert.deepEqual(undoChanges({ addLabelIds: ['CLEANED'], removeLabelIds: ['INBOX', 'UNREAD'] }), {
+    addLabelIds: ['INBOX', 'UNREAD'],
+    removeLabelIds: ['CLEANED']
+  });
 });
-test('age, categories, protected senders, starred mail and financial/security mail are checked independently', () => {
-  assert.equal(protectedReason(message(), DEFAULT_RULES), null);
-  assert.equal(protectedReason(message({ internalDate: String(Date.now()) }), DEFAULT_RULES), 'Recent message');
-  assert.equal(
-    protectedReason(message({ labelIds: ['INBOX', 'STARRED', 'CATEGORY_PROMOTIONS'] }), DEFAULT_RULES),
-    'Starred or important'
-  );
-  assert.equal(
-    protectedReason(message({ labelIds: ['INBOX', 'IMPORTANT', 'CATEGORY_PROMOTIONS'] }), DEFAULT_RULES),
-    'Starred or important'
-  );
-  assert.equal(
-    protectedReason(message({ labelIds: ['INBOX', 'CATEGORY_PERSONAL'] }), DEFAULT_RULES),
-    'Outside selected categories'
-  );
-  assert.equal(
-    protectedReason(message(), { ...DEFAULT_RULES, protectedSenders: ['offers@example.com'] }),
-    'Protected sender'
-  );
-  assert.match(
-    protectedReason(
-      message({ payload: { headers: [{ name: 'Subject', value: 'Your flight booking' }] } }),
-      DEFAULT_RULES
-    ),
-    /important/
-  );
-  assert.match(
-    protectedReason(message({ payload: { headers: [{ name: 'Subject', value: 'Security alert' }] } }), DEFAULT_RULES),
-    /important/
-  );
-});
-test('undo reverses only changed labels and unread status', () => {
-  const rules = { ...DEFAULT_RULES, markRead: true };
-  const change = changesFor(message(), rules, 'CLEANED');
-  assert.deepEqual(change, { addLabelIds: ['CLEANED'], removeLabelIds: ['INBOX', 'UNREAD'] });
-  assert.deepEqual(undoChanges(change), { addLabelIds: ['INBOX', 'UNREAD'], removeLabelIds: ['CLEANED'] });
-  const already = changesFor(message({ labelIds: ['INBOX', 'CATEGORY_PROMOTIONS', 'CLEANED'] }), rules, 'CLEANED');
-  assert.deepEqual(already, { addLabelIds: [], removeLabelIds: ['INBOX'] });
-});
-test('query excludes starred and important and mark-read-only excludes already-read mail', () => {
-  assert.match(gmailQuery(DEFAULT_RULES), /-is:starred -is:important/);
-  assert.match(gmailQuery({ ...DEFAULT_RULES, archive: false, markRead: true }), /is:unread/);
-});
-test('invalid rules and query injection are rejected', () => {
+test('invalid account rules are rejected and retired rules-only fields are dropped', () => {
   for (const input of [
-    { ...DEFAULT_RULES, days: 0 },
-    { ...DEFAULT_RULES, categories: ['promotions} in:anywhere'] },
     { ...DEFAULT_RULES, timezone: 'invalid' },
     { ...DEFAULT_RULES, timezone: undefined },
-    { ...DEFAULT_RULES, archive: false },
+    { ...DEFAULT_RULES, daily: 'yes' },
+    { ...DEFAULT_RULES, hour: 24 },
     { ...DEFAULT_RULES, protectedSenders: ['a@example.com -is:important'] }
   ])
     assert.throws(() => validateRules(input));
@@ -82,6 +23,16 @@ test('invalid rules and query injection are rejected', () => {
     validateRules({ ...DEFAULT_RULES, protectedSenders: ['A@example.com'] }).protectedSenders[0],
     'a@example.com'
   );
+  const legacy = {
+    ...DEFAULT_RULES,
+    days: 90,
+    categories: ['promotions'],
+    markRead: false,
+    archive: true,
+    aiEnabled: false
+  };
+  assert.deepEqual(Object.keys(validateRules(legacy)).sort(), Object.keys(DEFAULT_RULES).sort());
+  assert.deepEqual(validateRules({ ...DEFAULT_RULES, protectedSenders: undefined }).protectedSenders, []);
 });
 test('daily run uses the selected timezone and hour', () => {
   const rules = { ...DEFAULT_RULES, hour: 9, timezone: 'Asia/Kolkata' };

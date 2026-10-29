@@ -169,8 +169,7 @@ export async function createApp(options = {}) {
               store.all(
                 'SELECT sender,message_id,host,status,payload FROM subscriptions WHERE account_id=? ORDER BY sender LIMIT 200',
                 account.id
-              ),
-              service ? service.latestPlan(account.id) : null
+              )
             ])
           : null;
         return json(res, 200, {
@@ -194,7 +193,6 @@ export async function createApp(options = {}) {
             !config.clientSecret && 'GOOGLE_CLIENT_SECRET',
             !crypto && 'TOKEN_ENCRYPTION_KEY'
           ].filter(Boolean),
-          plan: details?.[4] || null,
           runs: details ? details[2].map(run => ({ ...run, undoable: Boolean(run.undoable) })) : [],
           subscriptions: (details?.[3] || []).map(({ payload, message_id, ...subscription }) => ({
             ...subscription,
@@ -353,14 +351,8 @@ export async function createApp(options = {}) {
         }
         if (url.pathname === '/api/rules') return json(res, 200, { rules: await service.saveRules(id, input) });
         if (url.pathname === '/api/routine/pause') return json(res, 200, await service.pauseDaily(id, input.duration));
-        if (['/api/scan', '/api/discover', '/api/apply', '/api/unsubscribe'].includes(url.pathname))
-          await requirePaid(service, id);
-        if (url.pathname === '/api/scan')
-          return json(res, 200, {
-            plan: await service.scan(id, 'manual', typeof input.nextPlanId === 'string' ? input.nextPlanId : null)
-          });
+        if (['/api/discover', '/api/unsubscribe'].includes(url.pathname)) await requirePaid(service, id);
         if (url.pathname === '/api/discover') return json(res, 200, await service.discover(id));
-        if (url.pathname === '/api/apply') return json(res, 200, await service.apply(id, input.planId, input.ids));
         if (url.pathname === '/api/undo') return json(res, 200, await service.undo(id, input.runId));
         if (url.pathname === '/api/unsubscribe') return json(res, 200, await service.unsubscribe(id, input.sender));
         if (url.pathname === '/api/logout') {
@@ -475,10 +467,6 @@ export async function createApp(options = {}) {
     try {
       await store.run(
         "UPDATE runs SET status='needs_review',detail='Server stopped before completion. Review recorded changes; uncertain writes are not retried.' WHERE status='running' AND account_id NOT IN (SELECT account_id FROM locks WHERE expires>?)",
-        Date.now()
-      );
-      await store.run(
-        "UPDATE plans SET status='needs_review' WHERE status='applying' AND account_id NOT IN (SELECT account_id FROM locks WHERE expires>?)",
         Date.now()
       );
       await service.daily();

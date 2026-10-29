@@ -12,12 +12,9 @@ const number = value => Number(value || 0).toLocaleString();
 const date = value =>
   new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 let state = null;
-let plan = null;
-let selected = new Set();
 let busy = false;
 let page = 'overview';
 let toastTimer;
-let approval = null;
 let preferencePage = 0;
 let learningState = { questions: [], memories: [], discovery: null };
 let discoveryStarted = false;
@@ -73,22 +70,10 @@ async function request(path, data) {
 }
 function setBusy(value, button, label) {
   busy = value;
-  for (const selector of [
-    '#scan-button',
-    '#discover-button',
-    '#save-rules',
-    '#review-cleanup',
-    '#routine-button',
-    '#disconnect-button',
-    '#logout-button',
-    '#confirm-disconnect'
-  ]) {
+  for (const selector of ['#discover-button', '#disconnect-button', '#logout-button', '#confirm-disconnect']) {
     const el = $(selector);
     if (el) el.disabled = value || !state?.connected;
   }
-  $$('#preview-body input').forEach(el => {
-    el.disabled = value || el.dataset.eligible !== 'true';
-  });
   if (button) {
     if (value) {
       button.dataset.originalText = button.textContent;
@@ -133,15 +118,7 @@ function connect() {
 function empty(title, text) {
   return `<div class="empty-state"><strong>${escape(title)}</strong><p>${escape(text)}</p></div>`;
 }
-function renderRules() {
-  const rules = state.rules;
-  $('#rule-days').value = rules.days;
-  $$('input[name=category]').forEach(el => {
-    el.checked = rules.categories.includes(el.value);
-  });
-  $('#rule-archive').checked = rules.archive;
-  $('#rule-read').checked = rules.markRead;
-  $('#rule-protected').value = rules.protectedSenders.join('\n');
+function renderAccountSettings() {
   $('#connection-settings-copy').textContent = state.connected
     ? `Connected as ${state.email}`
     : 'Connect Gmail to save your preferences.';
@@ -204,47 +181,6 @@ function renderSubscriptions() {
         'Find senders with an unsubscribe option. Review a familiar name and example before leaving a list.'
       );
 }
-
-function renderPreview() {
-  $('#preview-section').hidden = !plan;
-  $('#cleanup-approval').hidden = true;
-  approval = null;
-  if (!plan) return;
-  const candidates = plan.decisions.filter(d => !d.reason);
-  $('#preview-count').textContent = `${number(candidates.length)} ready to tidy`;
-  let nextButton = $('#next-batch');
-  if (!nextButton) {
-    nextButton = document.createElement('button');
-    nextButton.id = 'next-batch';
-    nextButton.className = 'secondary';
-    nextButton.textContent = 'Review next batch →';
-    nextButton.type = 'button';
-    $('.preview-footer').prepend(nextButton);
-  }
-  nextButton.hidden = !plan.moreAvailable;
-  nextButton.disabled = busy;
-  $('#preview-description').textContent =
-    `${number(plan.decisions.length)} messages inspected in this batch. ${plan.moreAvailable ? 'More matching mail remains; scan again after cleanup for the next batch.' : 'All messages returned for this batch are shown.'} Potentially important mail is kept. Preview expires after one hour.`;
-  $('#preview-body').innerHTML = plan.decisions.length
-    ? plan.decisions
-        .map(
-          item =>
-            `<tr class="${item.reason ? 'kept' : ''}"><td><input type="checkbox" data-message="${escape(item.id)}" data-eligible="${!item.reason}" aria-label="Select ${escape(item.subject)}" ${item.reason ? 'disabled' : selected.has(item.id) ? 'checked' : ''}></td><td><span class="subject">${escape(item.subject)}</span><span class="sender">${escape(item.sender)}</span></td><td>${date(item.date)}</td><td><span class="decision">${escape(item.reason || item.aiReason || 'Matches your cleanup rules')}</span><small class="sender">${escape(item.source)}</small></td></tr>`
-        )
-        .join('')
-    : '<tr><td colspan="4">No matching emails in this batch. Try a different age or category in your rules.</td></tr>';
-  updateSelection();
-}
-function updateSelection() {
-  const eligible = plan?.decisions.filter(d => !d.reason).length || 0;
-  $('#selection-summary').textContent = `${number(selected.size)} of ${number(eligible)} eligible emails selected`;
-  $('#select-all').checked = eligible > 0 && selected.size === eligible;
-  $('#select-all').indeterminate = selected.size > 0 && selected.size < eligible;
-  $('#select-all').disabled = !eligible || busy;
-  $('#review-cleanup').disabled = !selected.size || busy;
-  $('#cleanup-approval').hidden = true;
-  approval = null;
-}
 function render() {
   const connected = state.connected;
   const rules = state.rules;
@@ -274,26 +210,15 @@ function render() {
   }
   $('#routine-caption').textContent =
     connected && rules.daily ? `${hour} · ${rules.timezone}` : 'A quieter inbox on autopilot';
-  $('#routine-time').textContent = hour;
-  $('#routine-zone').textContent = rules.timezone;
-  $('#routine-state').textContent = connected && rules.daily && !routinePaused ? 'Enabled' : 'Paused';
-  $('#routine-button').textContent =
-    connected && rules.daily ? 'Manage my daily routine ↗' : 'Set up my daily routine ↗';
-  $('#rules-summary').textContent =
-    `${rules.categories.map(c => c[0].toUpperCase() + c.slice(1)).join(' & ')} · older than ${rules.days} days`;
-  $('#actions-summary').textContent =
-    `${rules.archive ? 'Archive to “Cleaned by agent”' : 'Keep in inbox with “Cleaned by agent” label'} · ${rules.markRead ? 'mark as read' : 'keep unread status'}`;
   $('#setup-banner').hidden = connected;
   $('#setup-banner').innerHTML = state.configured
-    ? '<div><strong>A calmer inbox starts here.</strong><p>Connect your Gmail, choose your boundaries, and preview your first cleanup. Nothing moves until you approve.</p></div><button class="primary" id="connect-panel">Connect Gmail ↗</button>'
-    : `<div><strong>Gmail connection is temporarily unavailable.</strong><p>Please try again later. You can explore your preferences in the meantime.</p></div><button class="secondary" id="setup-rules">Explore the rules ↗</button>`;
-  renderRules();
+    ? '<div><strong>A calmer inbox starts here.</strong><p>Connect your Gmail and tell your agent what matters. Nothing is deleted, and every cleanup can be undone.</p></div><button class="primary" id="connect-panel">Connect Gmail ↗</button>'
+    : `<div><strong>Gmail connection is temporarily unavailable.</strong><p>Please try again later. You can explore your preferences in the meantime.</p></div><button class="secondary" id="setup-rules">Explore preferences ↗</button>`;
+  renderAccountSettings();
   renderActivity();
   renderSubscriptions();
-  renderPreview();
   renderAgentPreferences();
-  for (const selector of ['#scan-button', '#discover-button', '#save-rules', '#routine-button'])
-    $(selector).disabled = busy || !connected;
+  $('#discover-button').disabled = busy || !connected;
   if (!connected) {
     $('#metric-unread').textContent = '—';
     $('#unread-caption').textContent = 'Connect to see your inbox';
@@ -301,9 +226,6 @@ function render() {
 }
 async function refresh(mailbox = false) {
   state = await request('/api/status');
-  const samePlan = plan?.id === state.plan?.id;
-  plan = state.plan;
-  if (!samePlan) selected = new Set(plan?.decisions.filter(d => !d.reason).map(d => d.id) || []);
   render();
   if (mailbox && state.connected) {
     try {
@@ -322,21 +244,6 @@ async function refresh(mailbox = false) {
   }
   queueMicrotask(() => maybeDiscover());
 }
-function rulesInput() {
-  return {
-    ...state.rules,
-    days: Number($('#rule-days').value),
-    categories: $$('input[name=category]:checked').map(input => input.value),
-    archive: $('#rule-archive').checked,
-    markRead: $('#rule-read').checked,
-    protectedSenders: $('#rule-protected')
-      .value.split(/[\n,]+/)
-      .map(s => s.trim())
-      .filter(Boolean),
-    aiEnabled: false,
-    aiConsentProvider: ''
-  };
-}
 $$('[data-page]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.page)));
 $$('[data-goto]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.goto)));
 $('#account-button').addEventListener('click', () => (state?.connected ? showPage('rules') : connect()));
@@ -346,29 +253,6 @@ $('#logout-button').addEventListener('click', event =>
     location.assign('/');
   })
 );
-$('#routine-button').addEventListener('click', () => {
-  showPage('rules');
-  $('#preferences-form').closest('details').open = true;
-  $('#pref-daily').focus();
-});
-$('#rules-form').addEventListener('submit', event => {
-  event.preventDefault();
-  operation($('#save-rules'), 'Saving…', async () => {
-    await request('/api/rules', rulesInput());
-    await refresh();
-    toast('Your rules are saved. Scan again for a fresh preview.');
-  });
-});
-$('#scan-button').addEventListener('click', () =>
-  operation($('#scan-button'), 'Reviewing up to 100 emails…', async () => {
-    const result = await request('/api/scan', {});
-    await refresh();
-    plan = result.plan;
-    selected = new Set(plan.decisions.filter(d => !d.reason).map(d => d.id));
-    renderPreview();
-    $('#preview-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  })
-);
 $('#discover-button').addEventListener('click', () =>
   operation($('#discover-button'), 'Finding mailing lists…', async () => {
     const result = await request('/api/discover', {});
@@ -376,53 +260,11 @@ $('#discover-button').addEventListener('click', () =>
     toast(`Inspected ${number(result.inspected)} recent messages for subscriptions.`);
   })
 );
-$('#select-all').addEventListener('change', event => {
-  selected = event.target.checked ? new Set(plan.decisions.filter(d => !d.reason).map(d => d.id)) : new Set();
-  $$('#preview-body input[data-eligible=true]').forEach(input => {
-    input.checked = selected.has(input.dataset.message);
-  });
-  updateSelection();
-});
-$('#preview-body').addEventListener('change', event => {
-  const id = event.target.dataset.message;
-  if (!id) return;
-  if (event.target.checked) selected.add(id);
-  else selected.delete(id);
-  updateSelection();
-});
-$('#review-cleanup').addEventListener('click', () => {
-  if (!plan || !selected.size || busy) return;
-  approval = { planId: plan.id, ids: [...selected] };
-  $('#cleanup-approval').innerHTML =
-    `<h3>Ready to tidy ${number(selected.size)} emails?</h3><p>${plan.rules.archive ? 'These messages will leave your inbox and receive the “Cleaned by agent” label.' : 'These messages stay in the inbox and receive the “Cleaned by agent” label.'} ${plan.rules.markRead ? 'Matching unread messages will also be marked as read.' : 'Their unread status will stay the same.'} Protections are checked again before each change. You can undo this cleanup from Activity.</p><div class="approval-actions"><button class="primary" id="confirm-cleanup">Approve cleanup →</button><button class="text-button" id="cancel-cleanup">Keep reviewing</button></div>`;
-  $('#cleanup-approval').hidden = false;
-  $('#confirm-cleanup').focus();
-});
-$('#cleanup-approval').addEventListener('click', event => {
-  if (event.target.id === 'cancel-cleanup') {
-    $('#cleanup-approval').hidden = true;
-    approval = null;
-  }
-  if (event.target.id === 'confirm-cleanup' && approval) {
-    const approved = { ...approval };
-    operation(event.target, 'Tidying your inbox…', async () => {
-      const result = await request('/api/apply', approved);
-      await refresh(true);
-      toast(`${number(result.changed)} emails tidied. Undo is available in Activity for 30 days.`);
-    });
-  }
-});
 document.addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button) return;
   if (button.id === 'connect-panel') connect();
   if (button.id === 'setup-rules') showPage('rules');
-  if (button.id === 'next-batch' && plan)
-    operation(button, 'Reviewing next batch…', async () => {
-      await request('/api/scan', { nextPlanId: plan.id });
-      await refresh();
-      toast('Next batch loaded. The previous batch was left unchanged.');
-    });
   if (button.dataset.unsubscribe) {
     const sub = state.subscriptions.find(s => s.sender === button.dataset.unsubscribe);
     if (!sub || busy) return;
@@ -682,8 +524,6 @@ $('#preferences-form').addEventListener('submit', event => {
   const rules = {
     ...state.rules,
     agent,
-    aiEnabled: false,
-    aiConsentProvider: '',
     daily: agent.enabled && state.schedulerActive && $('#pref-daily').checked,
     hour: Number($('#pref-hour').value),
     runsPerDay: Number($('#pref-runs').value),

@@ -65,9 +65,9 @@ test('unconfigured app serves real setup state, secure headers, and no invented 
   assert.equal(data.connected, false);
   assert.equal(data.configured, false);
   assert.deepEqual(data.runs, []);
-  assert.equal(data.plan, null);
+  assert.equal(data.plan, undefined);
   assert.match(status.headers.get('set-cookie'), /HttpOnly; SameSite=Lax/);
-  assert.equal((await call('/api/scan', { method: 'POST' })).status, 401);
+  assert.equal((await call('/api/agent/run', { method: 'POST' })).status, 401);
   assert.equal((await call('/.env')).status, 404);
 });
 
@@ -412,7 +412,7 @@ test('production routing serves landing and dashboard together and protects free
   const state = await (await call('/api/status', { headers: { Cookie: cookie } })).json();
   assert.equal(state.access.remaining, 100);
   assert.equal(state.access.dailyAllowed, false);
-  for (const path of ['/api/scan', '/api/discover', '/api/apply', '/api/unsubscribe']) {
+  for (const path of ['/api/discover', '/api/unsubscribe']) {
     const response = await call(path, {
       method: 'POST',
       headers: {

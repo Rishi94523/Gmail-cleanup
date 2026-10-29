@@ -103,7 +103,7 @@ export function agentProtection(
   if (message.labelIds.some(label => ['STARRED', 'IMPORTANT', 'DRAFT', 'SENT'].includes(label)))
     return 'Protected Gmail label';
   const sender = senderAddress(headersOf(message).from);
-  if (rules.protectedSenders.includes(sender)) return 'Protected sender';
+  if ((rules.protectedSenders || []).includes(sender)) return 'Protected sender';
   const exceptions =
     (rules.agent?.exceptions || '').toLowerCase().match(/[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}/g) || [];
   if (exceptions.includes(sender)) return 'Sender in your always-keep exceptions';
@@ -468,9 +468,24 @@ export async function learnInbox(service, id, consent, provider) {
 
 // Scheduling fields decide when the routine runs, not how an email is judged.
 // Keeping them out of the assessment fingerprint stops a pause, resume or new
-// daily time from re-sending every unread email to the model.
-export function assessmentRules({ daily, dailyPausedUntil, hour, runsPerDay, timezone, ...rules }) {
-  return rules;
+// daily time from re-sending every unread email to the model. Fields of the
+// removed rules-only cleanup are dropped too, so accounts that still store them
+// keep the same fingerprint once they are re-saved without them.
+export function assessmentRules({
+  daily,
+  dailyPausedUntil,
+  hour,
+  runsPerDay,
+  timezone,
+  days,
+  categories,
+  markRead,
+  archive,
+  aiEnabled,
+  aiConsentProvider,
+  ...rules
+}) {
+  return { ...rules, protectedSenders: rules.protectedSenders || [] };
 }
 
 export async function runAgent(
