@@ -36,3 +36,10 @@ OAuth tokens, discovery/sample context, learned preferences, example subscriptio
 Scheduler maintenance prunes data nothing reads again, at most hourly: rows left by the removed rules-only preview flow, agent decision logs beyond the latest 10 per account, change payloads past the 30-day undo window, and preference history older than 180 days. Runs, held messages, assessment markers and uncertain changes are kept because they prevent repeated processing or repeated model calls.
 
 Operational logs report durations, token/cache counts and failure statuses without email text, subjects or credentials. Schema changes live in versioned SQL migrations; validate them on an expiring Neon branch before production.
+
+
+### Performance diagnostics
+
+Workflow tracing is enabled by default (`PERFORMANCE_LOGGING=false` disables it). `account_operation` spans cover the account lock and its DB work; discovery and cleanup have child traces with parent trace IDs. Cleanup traces include run IDs; classification calls include batch IDs and initial/clarification pass labels. `classification_retry_selection` records retry and unknown counts explicitly. An intentional unknown category does not cause clarification; malformed output and low-confidence named topics can still receive one bounded retry.
+
+Structured start/completion events time Gmail/OAuth requests (normalized routes with no IDs or queries), full email preparation, model calls, SQL operations (statement hashes and verbs only), pool acquisition, and transaction controls. Stage/decision progress provides per-email progress without subjects or reasons. Existing AI usage events include trace/batch IDs, token/cache counts and elapsed time. Each workflow ends with wall time and operation counts, totals, maxima and failures. Totals overlap when spans nest or execute concurrently, so they must not be added to estimate wall time. DB query time includes pool acquisition for pooled queries; pool-wait spans show that portion separately. Model reasoning settings and output limits are unchanged. No prompts, responses, SQL text/parameters, mailbox IDs, account addresses or credentials are logged.

@@ -1,3 +1,4 @@
+import { timed } from './telemetry.js';
 import { PRIMARY_INBOX_QUERY } from './inbox-scope.js';
 
 export const UNREAD_COUNT_LIMIT = 1000;
@@ -37,7 +38,20 @@ export async function revokeGoogleToken(token, fetcher = fetch) {
   );
 }
 
-export async function jsonFetch(url, options = {}) {
+export function jsonFetch(url, options = {}) {
+  const parsed = new URL(url);
+  const path = parsed.pathname
+    .replace(/\/messages\/[^/]+/g, '/messages/:id')
+    .replace(/\/threads\/[^/]+/g, '/threads/:id')
+    .replace(/\/labels\/[^/]+/g, '/labels/:id');
+  return timed('google.request', () => jsonFetchInternal(url, options), {
+    api: parsed.hostname === 'oauth2.googleapis.com' ? 'oauth' : 'gmail',
+    path,
+    method: options.method || 'GET',
+    format: parsed.searchParams.get('format') || undefined
+  });
+}
+async function jsonFetchInternal(url, options = {}) {
   const response = await fetch(url, { ...options, signal: AbortSignal.timeout(20000) });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {

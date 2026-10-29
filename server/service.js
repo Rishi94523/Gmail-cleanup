@@ -1,3 +1,4 @@
+import { traced, timedSync } from './telemetry.js';
 import { accessFor, requirePaid } from './access.js';
 import { randomUUID } from 'node:crypto';
 import { validateRules, headersOf, senderAddress, undoChanges, dailyKey, dailyIsPaused } from './rules.js';
@@ -14,7 +15,13 @@ export const AGENT_LOGS_KEPT = 10;
 export class InboxService {
   constructor(store, crypto, config, clientFactory = gmailClient) {
     this.store = store;
-    this.crypto = crypto;
+    this.crypto = crypto
+      ? {
+          ...crypto,
+          seal: value => timedSync('crypto.seal', () => crypto.seal(value)),
+          open: value => timedSync('crypto.open', () => crypto.open(value))
+        }
+      : crypto;
     this.config = config;
     this.clientFactory = clientFactory;
     // Scheduled runs call the agent through this property so tests can observe them.
@@ -33,7 +40,10 @@ export class InboxService {
         await this.store.run('UPDATE accounts SET tokens=? WHERE id=?', this.crypto.seal(tokens), account.id)
     );
   }
-  async locked(id, fn) {
+  locked(id, fn) {
+    return traced('account_operation', () => this.lockedInternal(id, fn));
+  }
+  async lockedInternal(id, fn) {
     const owner = randomUUID();
     const now = Date.now();
     const locked = await this.store.run(

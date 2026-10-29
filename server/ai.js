@@ -1,3 +1,4 @@
+import { timed, traceFields } from './telemetry.js';
 // One transport for discovery, autonomous decisions, and advanced classification.
 // Provider changes are explicit: never send mail to a fallback provider on failure.
 import { failure } from './failures.js';
@@ -16,7 +17,10 @@ export function aiLabel() {
 export function missingAIKey() {
   return 'Configure NEBIUS_API_KEY and restart the server.';
 }
-export async function chatJSON(config, messages, fetcher = fetch, tools = []) {
+export function chatJSON(...args) {
+  return timed('ai.request', () => chatJSONInternal(...args));
+}
+async function chatJSONInternal(config, messages, fetcher = fetch, tools = []) {
   const provider = config.aiProvider || 'nebius';
   if (provider !== 'nebius') throw new Error('Unsupported AI provider.');
   if (!config.aiKey) throw new Error(missingAIKey(config));
@@ -41,7 +45,13 @@ export async function chatJSON(config, messages, fetcher = fetch, tools = []) {
     });
   } catch {
     console.warn(
-      JSON.stringify({ event: 'ai_request_failed', provider, elapsedMs: Date.now() - started, code: 'AI_UNAVAILABLE' })
+      JSON.stringify({
+        event: 'ai_request_failed',
+        ...traceFields(),
+        provider,
+        elapsedMs: Date.now() - started,
+        code: 'AI_UNAVAILABLE'
+      })
     );
     throw failure(
       'AI_UNAVAILABLE',
@@ -50,7 +60,13 @@ export async function chatJSON(config, messages, fetcher = fetch, tools = []) {
   }
   if (!response.ok) {
     console.warn(
-      JSON.stringify({ event: 'ai_request_failed', provider, elapsedMs: Date.now() - started, status: response.status })
+      JSON.stringify({
+        event: 'ai_request_failed',
+        ...traceFields(),
+        provider,
+        elapsedMs: Date.now() - started,
+        status: response.status
+      })
     );
     throw failure(
       `AI_HTTP_${response.status}`,
@@ -65,6 +81,7 @@ export async function chatJSON(config, messages, fetcher = fetch, tools = []) {
     console.info(
       JSON.stringify({
         event: 'ai_request_complete',
+        ...traceFields(),
         provider,
         model: config.aiModel,
         elapsedMs: Date.now() - started,

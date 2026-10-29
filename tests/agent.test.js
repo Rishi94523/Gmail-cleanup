@@ -808,7 +808,7 @@ test('batch preference proposal beside the id normalizes to a question, never a 
   }
 });
 
-test('unclassified batch results get one focused retry with independent aliases and a complete saved-topic decision', async () => {
+test('low-confidence named-category batch results get one focused retry with independent aliases and a complete saved-topic decision', async () => {
   const previousFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = async (_url, options) => {
@@ -845,7 +845,7 @@ test('unclassified batch results get one focused retry with independent aliases 
                           action: 'keep',
                           confidence: 1,
                           reason: 'Category unclear',
-                          preferenceCategory: 'unknown',
+                          preferenceCategory: 'newsletters',
                           categoryConfidence: 0
                         }
                       }
@@ -902,7 +902,7 @@ test('category retry is bounded and can ask one new broad question without inven
                           action: 'keep',
                           confidence: 1,
                           reason: 'Unclear category',
-                          preferenceCategory: 'unknown',
+                          preferenceCategory: 'newsletters',
                           categoryConfidence: 0
                         }
                       : {
@@ -1389,4 +1389,42 @@ test('hackathon daily agent runs with saved consent once per account-local day',
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('a valid unknown category never triggers a clarification retry, even with zero category confidence', async t => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return Response.json({
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: {
+            content: JSON.stringify({
+              decisions: [
+                {
+                  id: 'email_1',
+                  decision: {
+                    action: 'read',
+                    confidence: 0.99,
+                    reason: 'Low priority according to saved general preferences',
+                    preferenceCategory: 'unknown',
+                    categoryConfidence: 0
+                  }
+                }
+              ]
+            })
+          }
+        }
+      ]
+    });
+  };
+  const result = await modelDecisionBatch({ aiKey: 'fixture' }, 'Use saved preferences', [{ id: 'sample' }]);
+  assert.equal(calls, 1);
+  assert.equal(result.get('sample').action, 'read');
+  assert.equal(result.get('sample').preferenceCategory, 'unknown');
 });

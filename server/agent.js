@@ -1,3 +1,4 @@
+import { traced, timed, timingEvent, setRunId, contextual } from './telemetry.js';
 import { publicFailure } from './failures.js';
 import { failure } from './failures.js';
 import { mapLimit } from './gmail.js';
@@ -162,7 +163,20 @@ export const AGENT_DECISION_INSTRUCTION =
   'Use the supplied currentClock, receivedAt and ageDays. Follow written instructions. Apply an email-age restriction only when that topic explicitly has minAgeDays; compare receivedAt to the supplied currentClock/now, never to when a preference was saved. Without an explicit age condition, both older and newer emails follow the saved preference. Only a matching bank_transactions/security_notices preference with minAgeDays at least 30 can permit routine old bank or login notices. Return routineNotice:true only for clearly routine historical confirmations with no unresolved issue. Keep recent, suspicious, fraudulent, medical/legal, or uncertain alerts. Ask a broad age-based question if the preference is missing; never unsubscribe from transaction/security notices. ' +
   'Use userContext to understand interests, never to invent cleanup permissions. Follow written conditions in categoryPreferences; if any condition or sender exception is unclear, keep the email. Decide whether this email matters NOW using user preferences and explicit learnedPreference. Explicit topic preferences override broad keepJobs/keepNewsletters defaults for low-priority mail. A topic may keep, mark read, archive, or both independently of other topics. Keep jobs/recruiting/interviews/relevant LinkedIn when keepJobs=true and there is no explicit topic preference. Cold outreach: all keeps all; exceptional keeps clearly relevant opportunities based on interests; none permits clearing unsolicited pitches. Keep wanted blogs/newsletters, known people, exceptions, personal, medical, legal, time-sensitive or uncertain mail, and current or unresolved financial/security matters. Old routine bank/login confirmations may follow explicit matching age-based saved preferences; return routineNotice=true only when clearly routine and historical. Classify preferenceCategory from preferenceCategories and return categoryConfidence. Apply categoryPreferences across senders; explicit sender/domain exceptions take precedence over general category preferences. A user exception may keep or mark read Apple announcements even when the general product-announcement preference differs. If a broad category preference is missing, call ask_preference with its category. When no saved or standard topic fits, judge the email yourself instead of asking: clearly low-priority mail such as promotions, product marketing, welcome/onboarding, credit or usage reminders, generic digests and routine account notices with nothing left to do may take preferences.action (this also applies when topicActions=true), with preferenceCategory unknown and an honest confidence. Never ask per-product or per-sender questions. Do not re-ask answered categories; keep uncertain messages instead. Never infer that every list is unwanted from the existence of unsubscribe headers. User-approved autoUnsubscribe may remove only clearly unwanted pure product marketing, never OTPs, transactional mail, intentional newsletters, or mixed-purpose lists. Choose keep, the permitted cleanup action, or unsubscribe only with autoUnsubscribe=true. Return JSON {"action":"keep|read|archive|both|unsubscribe","confidence":0.0,"reason":"short reason","preferenceCategory":"one allowed category or unknown","categoryConfidence":0.0,"emailType":"marketing|newsletter|transactional|personal|recruiting|unknown","subscriptionIntent":"wanted|unwanted|unknown","routineNotice":false,"historyTypes":[{"id":"provided history id","type":"marketing|newsletter|transactional|unknown"}]}. Incomplete text or uncertain user intent must be kept or asked about, not acted on.';
 
-export async function modelDecisionBatch(config, instruction, items, { retryUnclassified = true } = {}) {
+export function modelDecisionBatch(config, instruction, items, options = {}) {
+  return contextual(
+    { batchId: randomUUID(), pass: options.retryUnclassified === false ? 'clarification' : 'initial' },
+    () =>
+      timed('ai.classification', () => modelDecisionBatchInternal(config, instruction, items, options), {
+        emailCount: items.length
+      })
+  );
+}
+async function modelDecisionBatchInternal(config, instruction, items, { retryUnclassified = true } = {}) {
+  timingEvent('classification_batch', {
+    pass: retryUnclassified ? 'initial' : 'clarification',
+    emailCount: items.length
+  });
   // Short request-local aliases prevent confusion with IDs inside preference
   // memories, and avoid asking the model to copy opaque Gmail identifiers.
   const aliased = items.map((item, index) => ({ ...item, id: `email_${index + 1}` }));
@@ -184,9 +198,17 @@ export async function modelDecisionBatch(config, instruction, items, { retryUncl
     throw failure('AI_INVALID_OUTPUT', 'AI returned an invalid decision batch. No emails in this batch were changed.');
   // Missing, duplicate or malformed entries cannot authorize an action for that
   // email. Other independently identified entries can still be processed.
+  const malformedIds = new Set();
   const decisions = new Map(
     aliased.map((input, index) => {
       const matches = entries.filter(entry => entry?.id === input.id);
+      if (
+        matches.length !== 1 ||
+        !matches[0]?.decision ||
+        typeof matches[0].decision !== 'object' ||
+        Array.isArray(matches[0].decision)
+      )
+        malformedIds.add(items[index].id);
       const decision =
         matches.length === 1 &&
         matches[0].decision &&
@@ -207,12 +229,19 @@ export async function modelDecisionBatch(config, instruction, items, { retryUncl
     const retry = items.filter(item => {
       const decision = decisions.get(item.id);
       if (categoryScope(decision?.requestPreference?.category)) return false;
+      // Unknown is a legitimate final classification, not a request to reason again.
+      if (decision?.preferenceCategory === 'unknown' && !malformedIds.has(item.id)) return false;
       return (
         !categoryScope(decision?.preferenceCategory) ||
         typeof decision?.categoryConfidence !== 'number' ||
         decision.categoryConfidence < TOPIC_MATCH_CONFIDENCE ||
         decision.categoryConfidence > 1
       );
+    });
+    timingEvent('classification_retry_selection', {
+      emailCount: items.length,
+      retryCount: retry.length,
+      unknownCount: items.filter(item => decisions.get(item.id)?.preferenceCategory === 'unknown').length
     });
     if (retry.length) {
       const repaired = await modelDecisionBatch(
@@ -260,7 +289,10 @@ async function knownPerson(gmail, sender, cache) {
   }
   return await cache.get(sender);
 }
-export async function learnInbox(service, id, consent, provider) {
+export function learnInbox(...args) {
+  return traced('discovery', () => learnInboxInternal(...args));
+}
+async function learnInboxInternal(service, id, consent, provider) {
   if (consent !== true) throw new Error('Allow AI processing to learn inbox preferences.');
   if (provider !== (service.config.aiProvider || 'nebius'))
     throw new Error('AI provider changed. Reload Preferences and confirm AI processing again.');
@@ -494,7 +526,10 @@ export function assessmentRules({
   return { ...rules, protectedSenders: rules.protectedSenders || [] };
 }
 
-export async function runAgent(
+export function runAgent(...args) {
+  return traced('cleanup', () => runAgentInternal(...args));
+}
+async function runAgentInternal(
   service,
   id,
   guard,
@@ -530,6 +565,7 @@ export async function runAgent(
     ).total;
   const gmail = service.client(account);
   const runId = randomUUID();
+  setRunId(runId);
   const decisions = [];
   const people = new Map();
   const histories = new Map();
@@ -562,7 +598,21 @@ export async function runAgent(
     mode === 'daily' ? 'daily' : mode === 'held' ? 'held_cleanup' : 'cleanup',
     Date.now()
   );
+  let previousDecisionAt = Date.now();
   const send = event => {
+    if (event.type === 'stage')
+      timingEvent('cleanup_stage', { stage: event.message, inspected: event.inspected ?? 0, total: event.total ?? 0 });
+    if (event.type === 'decision') {
+      const sincePreviousDecisionMs = Date.now() - previousDecisionAt;
+      previousDecisionAt = Date.now();
+      timingEvent('email_complete', {
+        sincePreviousDecisionMs,
+        inspected: event.inspected,
+        changed: event.changed,
+        kept: event.kept,
+        waiting: event.waiting
+      });
+    }
     try {
       emit(event);
     } catch {}
@@ -661,76 +711,77 @@ export async function runAgent(
     let cleanedLabel;
     const prepared = new Map();
     const batchDecisions = new Map();
-    const prepare = async messageId => {
-      let message;
-      try {
-        message = await gmail(`messages/${encodeURIComponent(messageId)}?format=full`);
-      } catch (error) {
-        if (error.status === 404) return null;
-        throw error;
-      }
-      const h = headersOf(message);
-      const sender = senderAddress(h.from);
-      const primaryVerified = await confirmPrimaryInbox(gmail, message);
-      let protect = agentProtection(message, account.rules, { allowOlderNotices: true, primaryVerified });
-      if (!protect && p.keepPeople && (await knownPerson(gmail, sender, people)))
-        protect = 'You have emailed this person before';
-      const scope = scopeFor(message);
-      const specificMemory = await memoryFor(service, id, scope);
-      const earlyException = matchingException(p.exceptionsRules, sender, null);
-      if (!protect && earlyException?.action === 'keep') protect = 'Your sender exception keeps this email';
-      if (!protect && !earlyException && specificMemory?.action === 'keep')
-        protect = 'You chose to keep this sender or list';
-      const content = emailText(message.payload) || String(message.snippet || '').slice(0, 12000);
-      if (!protect && p.autoUnsubscribe && !histories.has(scope.scopeHash))
-        histories.set(scope.scopeHash, subscriptionEvidence(gmail, message));
-      const history = !protect && p.autoUnsubscribe ? await histories.get(scope.scopeHash) : [];
-      const input = {
-        preferences: p,
-        userContext: learnedCategories.notes,
-        learnedPreference: specificMemory
-          ? {
-              scope: specificMemory.scope,
-              action: specificMemory.action,
-              explanation: specificMemory.explanation,
-              instructions: specificMemory.instructions,
-              minAgeDays: specificMemory.minAgeDays
-            }
-          : null,
-        categoryPreferences: learnedCategories.memories.map(m => ({
-          scope: m.scope,
-          action: m.action,
-          explanation: m.explanation,
-          instructions: m.instructions,
-          minAgeDays: m.minAgeDays
-        })),
-        pendingCategories: learnedCategories.questions.map(q => q.scope_hash.slice(9)),
-        preferenceCategories: [
-          ...new Set([
-            ...Object.keys(PREFERENCE_CATEGORIES),
-            ...learnedCategories.memories.map(m => m.scope.category),
-            ...learnedCategories.questions.map(q => q.scope_hash.slice(9))
-          ])
-        ],
-        sender,
-        fromAddress: sender,
-        listId: scope.listId,
-        subject: h.subject,
-        received: message.internalDate,
-        ...emailTiming(message),
-        currentClock: runClock,
-        sensitiveNoticeCategory: sensitiveNoticeKind(message),
-        now: runNow,
-        labels: message.labelIds,
-        text: history.length ? content.slice(0, 6000) : content,
-        history: history.map(m => ({
-          id: m.id,
-          subject: headersOf(m).subject,
-          text: (emailText(m.payload) || m.snippet || '').slice(0, 1000)
-        }))
-      };
-      return { message, h, sender, protect, scope, specificMemory, history, input };
-    };
+    const prepare = messageId =>
+      timed('email.prepare', async () => {
+        let message;
+        try {
+          message = await gmail(`messages/${encodeURIComponent(messageId)}?format=full`);
+        } catch (error) {
+          if (error.status === 404) return null;
+          throw error;
+        }
+        const h = headersOf(message);
+        const sender = senderAddress(h.from);
+        const primaryVerified = await confirmPrimaryInbox(gmail, message);
+        let protect = agentProtection(message, account.rules, { allowOlderNotices: true, primaryVerified });
+        if (!protect && p.keepPeople && (await knownPerson(gmail, sender, people)))
+          protect = 'You have emailed this person before';
+        const scope = scopeFor(message);
+        const specificMemory = await memoryFor(service, id, scope);
+        const earlyException = matchingException(p.exceptionsRules, sender, null);
+        if (!protect && earlyException?.action === 'keep') protect = 'Your sender exception keeps this email';
+        if (!protect && !earlyException && specificMemory?.action === 'keep')
+          protect = 'You chose to keep this sender or list';
+        const content = emailText(message.payload) || String(message.snippet || '').slice(0, 12000);
+        if (!protect && p.autoUnsubscribe && !histories.has(scope.scopeHash))
+          histories.set(scope.scopeHash, subscriptionEvidence(gmail, message));
+        const history = !protect && p.autoUnsubscribe ? await histories.get(scope.scopeHash) : [];
+        const input = {
+          preferences: p,
+          userContext: learnedCategories.notes,
+          learnedPreference: specificMemory
+            ? {
+                scope: specificMemory.scope,
+                action: specificMemory.action,
+                explanation: specificMemory.explanation,
+                instructions: specificMemory.instructions,
+                minAgeDays: specificMemory.minAgeDays
+              }
+            : null,
+          categoryPreferences: learnedCategories.memories.map(m => ({
+            scope: m.scope,
+            action: m.action,
+            explanation: m.explanation,
+            instructions: m.instructions,
+            minAgeDays: m.minAgeDays
+          })),
+          pendingCategories: learnedCategories.questions.map(q => q.scope_hash.slice(9)),
+          preferenceCategories: [
+            ...new Set([
+              ...Object.keys(PREFERENCE_CATEGORIES),
+              ...learnedCategories.memories.map(m => m.scope.category),
+              ...learnedCategories.questions.map(q => q.scope_hash.slice(9))
+            ])
+          ],
+          sender,
+          fromAddress: sender,
+          listId: scope.listId,
+          subject: h.subject,
+          received: message.internalDate,
+          ...emailTiming(message),
+          currentClock: runClock,
+          sensitiveNoticeCategory: sensitiveNoticeKind(message),
+          now: runNow,
+          labels: message.labelIds,
+          text: history.length ? content.slice(0, 6000) : content,
+          history: history.map(m => ({
+            id: m.id,
+            subject: headersOf(m).subject,
+            text: (emailText(m.payload) || m.snippet || '').slice(0, 1000)
+          }))
+        };
+        return { message, h, sender, protect, scope, specificMemory, history, input };
+      });
     for (const [index, messageId] of ids.slice(0, perRunLimit).entries()) {
       await guard();
       if (
