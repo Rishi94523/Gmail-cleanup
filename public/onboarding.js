@@ -246,7 +246,9 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
         ...(categories.has('job_opportunities') ? { keepJobs: categories.get('job_opportunities') === 'keep' } : {}),
         ...(categories.has('newsletters') ? { keepNewsletters: categories.get('newsletters') === 'keep' } : {})
       };
-      await request('/api/rules', { ...state.rules, agent, aiEnabled: false });
+      // Daily cleanup is on by default once setup finishes; Preferences can turn it off.
+      const daily = state.rules.daily || Boolean(state.access?.dailyAllowed && state.schedulerActive);
+      await request('/api/rules', { ...state.rules, agent, aiEnabled: false, daily });
       await refresh();
       await startAgent(event => {
         if (event.type === 'stage') panel.querySelector('.ob-thinking-line').textContent = event.message;

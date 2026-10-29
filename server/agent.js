@@ -469,7 +469,7 @@ export async function learnInbox(service, id, consent, provider) {
 // Scheduling fields decide when the routine runs, not how an email is judged.
 // Keeping them out of the assessment fingerprint stops a pause, resume or new
 // daily time from re-sending every unread email to the model.
-export function assessmentRules({ daily, dailyPausedUntil, hour, timezone, ...rules }) {
+export function assessmentRules({ daily, dailyPausedUntil, hour, runsPerDay, timezone, ...rules }) {
   return rules;
 }
 

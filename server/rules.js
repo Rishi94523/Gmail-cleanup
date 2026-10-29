@@ -7,6 +7,7 @@ export const DEFAULT_RULES = Object.freeze({
   daily: false,
   dailyPausedUntil: 0,
   hour: 9,
+  runsPerDay: 1,
   timezone: 'Asia/Kolkata',
   aiEnabled: false
 });
@@ -30,6 +31,8 @@ export function validateRules(input) {
   )
     throw new Error('Choose archive, mark as read, or both.');
   if (!Number.isInteger(input.hour) || input.hour < 0 || input.hour > 23) throw new Error('Choose a valid daily hour.');
+  const runsPerDay = input.runsPerDay ?? 1;
+  if (![1, 2, 3].includes(runsPerDay)) throw new Error('Choose 1, 2 or 3 cleanups per day.');
   if (typeof input.timezone !== 'string' || input.timezone.length > 100) throw new Error('Choose a valid timezone.');
   try {
     new Intl.DateTimeFormat('en', { timeZone: input.timezone }).format();
@@ -48,6 +51,7 @@ export function validateRules(input) {
     daily: input.daily,
     dailyPausedUntil,
     hour: input.hour,
+    runsPerDay,
     timezone: input.timezone,
     aiEnabled: input.aiEnabled
   };
@@ -91,19 +95,39 @@ export function changesFor(message, rules, cleanedLabel) {
 export function undoChanges(change) {
   return { addLabelIds: change.removeLabelIds, removeLabelIds: change.addLabelIds };
 }
-export function dailyKey(rules, now = new Date()) {
-  if (dailyIsPaused(rules, now.getTime())) return null;
-  const parts = Object.fromEntries(
+function localParts(timezone, at) {
+  return Object.fromEntries(
     new Intl.DateTimeFormat('en-CA', {
-      timeZone: rules.timezone,
+      timeZone: timezone,
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
       hour: '2-digit',
+      minute: '2-digit',
       hourCycle: 'h23'
     })
-      .formatToParts(now)
+      .formatToParts(at)
       .map(p => [p.type, p.value])
   );
-  return Number(parts.hour) >= rules.hour ? `${parts.year}-${parts.month}-${parts.day}` : null;
+}
+// Local start hours of each daily run, evenly spaced across 24 hours.
+export function dailyHours(rules) {
+  const runs = rules.runsPerDay || 1;
+  return Array.from({ length: runs }, (_, i) => (rules.hour + (i * 24) / runs) % 24);
+}
+// Key of the most recent scheduled run that is due, or null. Keys sort in time
+// order ("2026-10-29" < "2026-10-29#2" < "2026-10-29#3" < "2026-10-30"), so a
+// run is due when the account's last claimed key is older than this one.
+export function dailyKey(rules, now = new Date()) {
+  if (dailyIsPaused(rules, now.getTime())) return null;
+  const parts = localParts(rules.timezone, now);
+  const minutes = Number(parts.hour) * 60 + Number(parts.minute);
+  const runs = rules.runsPerDay || 1;
+  if (runs === 1) return minutes >= rules.hour * 60 ? `${parts.year}-${parts.month}-${parts.day}` : null;
+  // A cycle starts at the chosen hour and may cross midnight (e.g. 21:00, 05:00, 13:00).
+  const sinceStart = (minutes - rules.hour * 60 + 1440) % 1440;
+  const slot = Math.floor(sinceStart / (1440 / runs));
+  const start = localParts(rules.timezone, new Date(now.getTime() - sinceStart * 60000));
+  const day = `${start.year}-${start.month}-${start.day}`;
+  return slot === 0 ? day : `${day}#${slot + 1}`;
 }

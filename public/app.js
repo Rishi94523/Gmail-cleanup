@@ -259,8 +259,14 @@ function render() {
   $('#metric-cleaned').textContent = connected ? number(state.totals?.cleaned) : '—';
   $('#metric-unsubscribed').textContent = connected ? number(state.totals?.requested) : '—';
   $('#metric-routine').textContent =
-    rules.daily && connected ? (isRoutinePaused(rules) ? 'Paused' : 'Every day') : 'Not set';
-  const hour = `${String(rules.hour).padStart(2, '0')}:00`;
+    rules.daily && connected
+      ? isRoutinePaused(rules)
+        ? 'Paused'
+        : (rules.runsPerDay || 1) > 1
+          ? `${rules.runsPerDay}× a day`
+          : 'Every day'
+      : 'Not set';
+  const hour = runTimes(rules.hour, rules.runsPerDay);
   const routinePaused = isRoutinePaused(rules);
   if (routinePaused) {
     $('#agent-pill').classList.remove('on');
@@ -507,6 +513,17 @@ const agentDefaults = {
   interests: ''
 };
 for (let hour = 0; hour < 24; hour++) $('#pref-hour').add(new Option(`${String(hour).padStart(2, '0')}:00`, hour));
+// Daily runs are evenly spaced across 24 hours from the chosen start time.
+function runTimes(hour, runs = 1) {
+  return Array.from({ length: runs }, (_, i) => `${String((hour + (i * 24) / runs) % 24).padStart(2, '0')}:00`).join(
+    ', '
+  );
+}
+function renderRunTimes() {
+  const runs = Number($('#pref-runs').value);
+  $('#pref-run-times').textContent = runs > 1 ? `Runs at ${runTimes(Number($('#pref-hour').value), runs)}` : '';
+}
+for (const id of ['#pref-hour', '#pref-runs']) $(id).addEventListener('change', renderRunTimes);
 function renderAgentControls() {
   const p = { ...agentDefaults, ...state.rules.agent };
   const consentMatches = p.consentProvider === (state.aiProvider || 'nebius');
@@ -572,6 +589,8 @@ function renderAgentPreferences() {
     $(`#${id}`).value = p[key];
   $('#pref-daily').checked = state.rules.daily;
   $('#pref-hour').value = state.rules.hour;
+  $('#pref-runs').value = state.rules.runsPerDay || 1;
+  renderRunTimes();
   $('#pref-zone').value = state.rules.timezone;
   renderRoutinePause();
   renderExceptions();
@@ -667,6 +686,7 @@ $('#preferences-form').addEventListener('submit', event => {
     aiConsentProvider: '',
     daily: agent.enabled && state.schedulerActive && $('#pref-daily').checked,
     hour: Number($('#pref-hour').value),
+    runsPerDay: Number($('#pref-runs').value),
     timezone: $('#pref-zone').value
   };
   operation($('#save-preferences'), 'Saving…', async () => {

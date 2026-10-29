@@ -158,6 +158,44 @@ test('daily agent runs once per account-local day and only after explicit enabli
   assert.equal(f.store.get('SELECT kind FROM runs').kind, 'daily');
 });
 
+test('three runs a day each run once at their evenly spaced times', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-20T00:30:00Z') });
+  const f = fixture(t);
+  f.store.run(
+    "INSERT INTO account_access(account_key,tier) VALUES(?,'paid')",
+    createHash('sha256').update(f.accountId).digest('hex')
+  );
+  await f.service.saveRules(f.accountId, { ...DEFAULT_RULES, daily: true, hour: 0, runsPerDay: 3, timezone: 'UTC' });
+  const runs = () => f.store.get("SELECT count(*) AS n FROM runs WHERE kind='daily'").n;
+  const lastDay = () => f.store.get('SELECT last_day FROM accounts').last_day;
+  await f.service.daily();
+  await f.service.daily();
+  assert.equal(lastDay(), '2026-10-20');
+  const first = runs();
+  assert.equal(first, 1, 'The 00:00 run happens once');
+  t.mock.timers.tick(7 * 3600000); // 07:30, still the first slot
+  await f.service.daily();
+  assert.equal(runs(), first);
+  t.mock.timers.tick(3600000); // 08:30
+  await f.service.daily();
+  await f.service.daily();
+  assert.equal(lastDay(), '2026-10-20#2');
+  assert.equal(runs(), first + 1);
+  t.mock.timers.tick(8 * 3600000); // 16:30
+  await f.service.daily();
+  assert.equal(lastDay(), '2026-10-20#3');
+  assert.equal(runs(), first + 2);
+  // Switching back to once a day must not repeat today's cleanup.
+  const { rules } = await f.service.account(f.accountId);
+  await f.service.saveRules(f.accountId, { ...rules, runsPerDay: 1 });
+  await f.service.daily();
+  assert.equal(runs(), first + 2);
+  t.mock.timers.tick(8 * 3600000); // next day 00:30
+  await f.service.daily();
+  assert.equal(lastDay(), '2026-10-21');
+  assert.equal(runs(), first + 3);
+});
+
 test('daily pauses persist per account, preserve settings, validate durations, and do not enable a disabled routine', async t => {
   const f = fixture(t);
   const before = (await f.service.account(f.accountId)).rules;

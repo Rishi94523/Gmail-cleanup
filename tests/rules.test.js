@@ -7,7 +7,8 @@ import {
   changesFor,
   undoChanges,
   gmailQuery,
-  dailyKey
+  dailyKey,
+  dailyHours
 } from '../server/rules.js';
 import { encryption, publicIPv4, unsubscribeUrl } from '../server/security.js';
 import { randomBytes } from 'node:crypto';
@@ -92,6 +93,29 @@ test('daily run uses the selected timezone and hour', () => {
   assert.equal(dailyKey({ ...rules, dailyPausedUntil: -1 }, new Date('2030-10-17T03:30:00Z')), null);
   for (const value of [-2, 'tomorrow', 0.5, Infinity])
     assert.throws(() => validateRules({ ...rules, dailyPausedUntil: value }), /pause/);
+});
+test('up to three daily runs are evenly spaced from the start hour, including across midnight', () => {
+  // Asia/Kolkata is UTC+5:30, so 09:00 local is 03:30Z.
+  const rules = { ...DEFAULT_RULES, hour: 9, runsPerDay: 3, timezone: 'Asia/Kolkata' };
+  assert.deepEqual(dailyHours(rules), [9, 17, 1]);
+  assert.deepEqual(dailyHours({ ...rules, runsPerDay: 2 }), [9, 21]);
+  assert.deepEqual(dailyHours({ ...rules, runsPerDay: undefined }), [9]);
+  const at = iso => dailyKey(rules, new Date(iso));
+  assert.equal(at('2026-10-16T03:29:00Z'), '2026-10-15#3', '08:59 is still the previous cycle’s 01:00 run');
+  assert.equal(at('2026-10-16T03:30:00Z'), '2026-10-16');
+  assert.equal(at('2026-10-16T11:29:00Z'), '2026-10-16');
+  assert.equal(at('2026-10-16T11:30:00Z'), '2026-10-16#2');
+  assert.equal(at('2026-10-16T19:30:00Z'), '2026-10-16#3', '01:00 next calendar day belongs to the same cycle');
+  assert.equal(at('2026-10-17T03:30:00Z'), '2026-10-17');
+  // Claim keys sort in time order, so the scheduler can skip anything not newer.
+  const keys = ['2026-10-15#3', '2026-10-16', '2026-10-16#2', '2026-10-16#3', '2026-10-17'];
+  assert.deepEqual([...keys].sort(), keys);
+  assert.equal(dailyKey({ ...rules, dailyPausedUntil: -1 }, new Date('2026-10-16T11:30:00Z')), null);
+  assert.equal(validateRules({ ...DEFAULT_RULES }).runsPerDay, 1);
+  const { runsPerDay, ...legacy } = DEFAULT_RULES;
+  assert.equal(runsPerDay, 1);
+  assert.equal(validateRules(legacy).runsPerDay, 1, 'Accounts saved before this setting default to one run');
+  for (const value of [0, 4, 1.5, '2']) assert.throws(() => validateRules({ ...rules, runsPerDay: value }), /per day/);
 });
 test('encrypted tokens round trip and tampering fails', () => {
   const cipher = encryption(randomBytes(32).toString('base64'));

@@ -460,18 +460,19 @@ export class InboxService {
       const rules = JSON.parse(row.rules);
       if (!rules.daily || dailyIsPaused(rules) || !(await accessFor(this, row.id)).dailyAllowed) continue;
       const day = dailyKey(rules);
-      if (!day || row.last_day === day) continue;
+      // Keys sort in time order, so a later or equal claim means this run already happened.
+      if (!day || (row.last_day && row.last_day >= day)) continue;
       try {
         await this.locked(row.id, async guard => {
           const latest = await this.store.get('SELECT last_day,rules FROM accounts WHERE id=?', row.id);
           if (
             !latest ||
-            latest.last_day === day ||
+            (latest.last_day && latest.last_day >= day) ||
             !JSON.parse(latest.rules).daily ||
             dailyIsPaused(JSON.parse(latest.rules))
           )
             return;
-          // Claim once per day; interrupted/failed mutations require manual review.
+          // Claim each scheduled run once; interrupted/failed mutations require manual review.
           await this.store.run('UPDATE accounts SET last_day=?,last_error=NULL WHERE id=?', day, row.id);
           if (JSON.parse(latest.rules).agent?.enabled) {
             await runAgent(this, row.id, guard, undefined, 'daily');

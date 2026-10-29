@@ -19,6 +19,8 @@ The same Node service serves the React landing page, workspace, OAuth callback a
 
 ## Daily execution
 
+Accounts choose 1–3 runs per day (`runsPerDay`, default 1), evenly spaced across 24 hours from the start hour in the account's timezone. Each run has a claim key that sorts in time order (`2026-10-29`, `2026-10-29#2`, `2026-10-29#3`); a cycle that crosses midnight keeps its start date. The scheduler runs an account only when its newest due key is later than `last_day`, so retries, replicas and changing the run count never repeat a run. Onboarding turns daily cleanup on when setup finishes for accounts allowed daily runs.
+
 Local development uses an in-process minute timer. Cloud Run uses Cloud Scheduler every five minutes, with a Google-signed OIDC identity token verified for the exact audience and expected scheduler service account. Only users who enabled daily cleanup are eligible. A database lease and an account-local daily claim prevent duplicate runs across replicas and retries. The browser can be closed, and the service can scale to zero between requests.
 
 The account's rules JSON stores `dailyPausedUntil`: 0 for no pause, -1 until resumed, or an absolute timestamp for 1/7/30-day pauses. Scheduler eligibility and active daily runs check the pause; skipped accounts do not claim the day. A CSRF-protected pause/resume endpoint preserves the schedule, preferences and onboarding consent. Pauses do not block manual runs or enable an otherwise disabled routine. No schema migration is required for existing accounts.
