@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { headersOf, senderAddress } from './rules.js';
-import { PREFERENCE_CATEGORIES, categoryScope, discoveryModelKey } from './preference-categories.js';
+import { PREFERENCE_CATEGORIES, categoryScope, discoveryModelKey, newTopicScope } from './preference-categories.js';
 import { chatJSON } from './ai.js';
 import { clockContext } from './email-context.js';
 
@@ -158,7 +158,7 @@ function preferenceAge(value, scope, fallback = 0) {
 export async function askPreference(service, id, message, p, args, { initial = false, authored = false } = {}) {
   if (
     !args ||
-    !categoryScope(args.category) ||
+    !newTopicScope(args.category) ||
     typeof args.question !== 'string' ||
     !args.question.trim() ||
     args.question.length > 240 ||
@@ -469,7 +469,7 @@ export async function interpretNotes(service, id, input) {
     {
       role: 'system',
       content:
-        'Turn user-written inbox instructions into a preview for explicit confirmation. No email changes occur here. Return JSON {"supported":true,"topics":[{"category":"existing key or topic_new_broad_topic","action":"keep|read|archive|both","minAgeDays":0}],"context":true}. Set context=true only when the text contains background or interests worth remembering, otherwise false. Original user text is stored verbatim; do not paraphrase it. Use existing category keys for the same meaning. Standard topic examples are supplied, not mandatory. Create at most eight broad topic preferences across senders. Only propose an action the user explicitly requested; preserve every condition and sender exception in their original text, which will accompany each topic. Do not generalize a single-sender request into unconditional permission for a whole topic. Use topic-specific age thresholds, at least 30 days for routine bank transactions or login notices. Never authorize deletion, trash, sending, unsubscribe, disabling protections, or handling unresolved financial/security/medical/legal alerts. If vague, contradictory, unsupported, or requesting a change that needs clarification, return {"supported":false,"clarification":"one natural question"}; do not silently save only the supported portion. Background such as a job search may be saved as context without inventing cleanup permission. Context cannot authorize cleanup. Empty topics are allowed only when context=true.'
+        'Turn user-written inbox instructions into a preview for explicit confirmation. No email changes occur here. Return JSON {"supported":true,"topics":[{"category":"existing key or a descriptive topic_ slug such as topic_service_notices","action":"keep|read|archive|both","minAgeDays":0}],"context":true}. Set context=true only when the text contains background or interests worth remembering, otherwise false. Original user text is stored verbatim; do not paraphrase it. Use existing category keys for the same meaning. Standard topic examples are supplied, not mandatory. Create at most eight broad topic preferences across senders. Only propose an action the user explicitly requested; preserve every condition and sender exception in their original text, which will accompany each topic. Do not generalize a single-sender request into unconditional permission for a whole topic. Use topic-specific age thresholds, at least 30 days for routine bank transactions or login notices. Never authorize deletion, trash, sending, unsubscribe, disabling protections, or handling unresolved financial/security/medical/legal alerts. If vague, contradictory, unsupported, or requesting a change that needs clarification, return {"supported":false,"clarification":"one natural question"}; do not silently save only the supported portion. Background such as a job search may be saved as context without inventing cleanup permission. Context cannot authorize cleanup. Empty topics are allowed only when context=true.'
     },
     {
       role: 'user',
@@ -498,7 +498,7 @@ export async function interpretNotes(service, id, input) {
     throw new Error('Please describe up to eight topics at a time.');
   const seen = new Set();
   const topics = result.topics.map(topic => {
-    const scope = categoryScope(topic?.category);
+    const scope = newTopicScope(topic?.category);
     if (!scope || seen.has(scope.category) || !['keep', 'read', 'archive', 'both'].includes(topic.action))
       throw new Error('The proposed preference needs clarification. Please try a more specific instruction.');
     seen.add(scope.category);

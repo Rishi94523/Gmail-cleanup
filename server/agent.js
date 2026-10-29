@@ -23,7 +23,8 @@ import {
   categoryScope,
   matchingException,
   validateExceptions,
-  discoveryModelKey
+  discoveryModelKey,
+  newTopicScope
 } from './preference-categories.js';
 import { subscriptionEvidence, unsubscribeEligible, automaticUnsubscribe } from './subscription-agent.js';
 
@@ -338,7 +339,7 @@ export async function learnInbox(service, id, consent, provider) {
   }
   const knownTopics = await categoryContext(service, id);
   const discoveryPrompt =
-    'Discover broad inbox preferences from these actual first-100-email records, using metadata only: subjects, sender identities and dates. No email bodies or snippets are available. Do not claim to have read the contents. Read the whole sample before choosing questions. Cover the recurring low-priority topics throughout the sample, not just the most recognizable two. There is no mandatory question or order. Jobs/LinkedIn and newsletters are examples only: omit them when absent. Distinguish genuine job opportunities from marketing by career tools, intentional publications from unsolicited activity digests, and routine service notices (welcome emails, exhausted credits, terms reminders, product onboarding) from active security/financial alerts. Invent broad reusable topics where the examples do not fit. Do not ask about one brand or sender. Ask zero to eight questions, ordered by how many sample messages they help handle. Every question must fit keep unchanged, mark read, archive, both, or decide later; never suggest unsupported folders or grouping. Cite one actual messageId and an exact evidenceQuote from its sender, subject, or listId. Return JSON {"summary":"one sentence","suggestions":[],"questions":[{"messageId":"exact supplied id","category":"standard key or topic_new_topic","question":"How should I handle [broad topic]? (at most 110 characters)","reason":"Explain the observed pattern and why a preference is needed","evidenceQuote":"exact short source quote"}]}. Standard category examples: product_announcements, sales_discounts, job_opportunities, newsletters, social_notifications, event_invitations, surveys_feedback, cold_outreach, bank_transactions, security_notices. Use bank_transactions for old routine bank confirmations, and security_notices for old routine login/verification notices; ask an age-based preference when those recur rather than treating every old confirmation as an active alert. These examples do not restrict topics or force questions. Avoid redundant questions, but do not omit an obvious recurring topic because it lacks a standard key. Questions never authorize mail changes.';
+    'Discover broad inbox preferences from these actual first-100-email records, using metadata only: subjects, sender identities and dates. No email bodies or snippets are available. Do not claim to have read the contents. Read the whole sample before choosing questions. Cover the recurring low-priority topics throughout the sample, not just the most recognizable two. There is no mandatory question or order. Jobs/LinkedIn and newsletters are examples only: omit them when absent. Distinguish genuine job opportunities from marketing by career tools, intentional publications from unsolicited activity digests, and routine service notices (welcome emails, exhausted credits, terms reminders, product onboarding) from active security/financial alerts. Invent broad reusable topics where the examples do not fit. Do not ask about one brand or sender. Ask zero to eight questions, ordered by how many sample messages they help handle. Every question must fit keep unchanged, mark read, archive, both, or decide later; never suggest unsupported folders or grouping. Cite one actual messageId and an exact evidenceQuote from its sender, subject, or listId. Return JSON {"summary":"one sentence","suggestions":[],"questions":[{"messageId":"exact supplied id","category":"standard key or a descriptive topic_ slug such as topic_service_notices","question":"How should I handle [broad topic]? (at most 110 characters)","reason":"Explain the observed pattern and why a preference is needed","evidenceQuote":"exact short source quote"}]}. Standard category examples: product_announcements, sales_discounts, job_opportunities, newsletters, social_notifications, event_invitations, surveys_feedback, cold_outreach, bank_transactions, security_notices. Use bank_transactions for old routine bank confirmations, and security_notices for old routine login/verification notices; ask an age-based preference when those recur rather than treating every old confirmation as an active alert. These examples do not restrict topics or force questions. Avoid redundant questions, but do not omit an obvious recurring topic because it lacks a standard key. Questions never authorize mail changes.';
   const aliases = new Map(sample.map((message, index) => [`email_${index + 1}`, message.id]));
   const modelSample = sample.map((message, index) => ({ ...message, id: `email_${index + 1}` }));
   const groups = [];
@@ -367,7 +368,7 @@ export async function learnInbox(service, id, consent, provider) {
       const cited = sample.find(message => message.id === question.messageId);
       if (
         !cited ||
-        !categoryScope(question.category) ||
+        !newTopicScope(question.category) ||
         agentProtection(source.get(question.messageId), account.rules, { allowOlderNotices: true })
       )
         return false;
@@ -425,7 +426,7 @@ export async function learnInbox(service, id, consent, provider) {
       question.reason.length > 400
     )
       continue;
-    if (!categoryScope(question.category)) continue;
+    if (!newTopicScope(question.category)) continue;
     const cited = sample.find(m => m.id === question.messageId);
     const text = `${cited.sender || ''} ${cited.subject || ''} ${cited.listId || ''}`.toLowerCase();
     const quote = typeof question.evidenceQuote === 'string' ? question.evidenceQuote.trim().toLowerCase() : '';
@@ -856,7 +857,7 @@ export async function runAgent(
       if (memory && !['keep', memory.action].includes(raw?.action) && !raw?.requestPreference)
         result = { action: 'keep', reason: 'AI decision conflicts with your saved preference; left unchanged' };
       const ask = async args => {
-        if (!categoryScope(args.category))
+        if (!newTopicScope(args.category))
           return { action: 'keep', reason: 'Uncertain category; left unchanged without another question' };
         const tool = await askPreference(service, id, message, p, {
           category: args.category,

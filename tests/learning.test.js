@@ -23,7 +23,12 @@ import {
 } from '../server/learning.js';
 import { unsubscribeEligible, automaticUnsubscribe } from '../server/subscription-agent.js';
 import { chatJSON } from '../server/ai.js';
-import { categoryScope, matchingException, validateExceptions } from '../server/preference-categories.js';
+import {
+  categoryScope,
+  matchingException,
+  newTopicScope,
+  validateExceptions
+} from '../server/preference-categories.js';
 import { cleanAnsweredHolds } from '../server/held-cleanup.js';
 import { reserveFreeEmail, accessFor } from '../server/access.js';
 
@@ -488,6 +493,14 @@ test('a category answer applies to another brand and an Apple exception takes pr
   assert.ok(!apple.labelIds.includes('UNREAD'));
   assert.ok(other.labelIds.includes('UNREAD'));
   assert.equal((await learningTray(f.service, f.id)).questions.length, 0);
+});
+test('new topics reject placeholder names that would become a vague question heading', () => {
+  for (const placeholder of ['topic_new_topic', 'topic_new_broad_topic', 'topic_other', 'topic_misc_emails'])
+    assert.equal(newTopicScope(placeholder), null, placeholder);
+  assert.equal(newTopicScope('topic_service_notices').label, 'Service notices');
+  assert.equal(newTopicScope('topic_newsletters_india').label, 'Newsletters india');
+  // Preferences already saved under a placeholder name still resolve.
+  assert.equal(categoryScope('topic_new_topic').label, 'New topic');
 });
 test('category scope and exception matching reject unknown categories and misleading domains', () => {
   assert.equal(categoryScope('a-new-category-per-product'), null);

@@ -53,6 +53,13 @@ export function categoryScope(category) {
     scopeHash: `category:${category}`
   };
 }
+// For new questions and topics only: a copied placeholder name such as
+// topic_new_topic would become the heading the user sees ("new topic").
+// Saved preferences keep resolving through categoryScope.
+export function newTopicScope(category) {
+  if (/^topic_(?:new|other|misc|general|unknown|topic)(?:_|$)/.test(category || '')) return null;
+  return categoryScope(category);
+}
 export function discoveryModelKey(model) {
   return `${model || 'default'}:metadata-topic-preferences-v4`;
 }
