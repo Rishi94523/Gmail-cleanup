@@ -1,3 +1,4 @@
+import { readyBatches } from './batch-results.js';
 import { traced, timed, timingEvent, setRunId, contextual } from './telemetry.js';
 import { publicFailure } from './failures.js';
 import { failure } from './failures.js';
@@ -782,7 +783,65 @@ async function runAgentInternal(
         };
         return { message, h, sender, protect, scope, specificMemory, history, input };
       });
-    for (const [index, messageId] of ids.slice(0, perRunLimit).entries()) {
+    async function* decisionOrder() {
+      if (infer !== modelDecision) {
+        yield* ids.slice(0, perRunLimit);
+        return;
+      }
+      let preparedCount = 0;
+      let classifiedCount = 0;
+      for (let index = 0; index < Math.min(ids.length, perRunLimit); index += 20) {
+        await guard();
+        const window = ids.slice(index, Math.min(index + 20, perRunLimit));
+        const reserved = [];
+        for (const candidate of window) {
+          if (
+            mode !== 'held' &&
+            access.tier === 'free' &&
+            !(await reserveFreeEmail(service, id, candidate, access.recovering))
+          )
+            prepared.set(candidate, null);
+          else reserved.push(candidate);
+        }
+        await mapLimit(reserved, 6, async candidate => {
+          prepared.set(candidate, await prepare(candidate));
+          preparedCount++;
+          send({
+            type: 'stage',
+            message: `Read ${preparedCount} of ${ids.length} emails; ${decisions.length} decisions completed`,
+            prepared: preparedCount,
+            inspected: decisions.length,
+            total: ids.length
+          });
+        });
+        const eligible = window.filter(
+          id => prepared.get(id) && !prepared.get(id).protect && prepared.get(id).message.labelIds?.includes('UNREAD')
+        );
+        const batches = [];
+        for (let offset = 0; offset < eligible.length; offset += 10) batches.push(eligible.slice(offset, offset + 10));
+        // Fetching Gmail messages does not mean the model has decided yet.
+        // Each ready AI batch yields decisions immediately, independent of siblings.
+        for await (const { batch, result } of readyBatches(batches, batch =>
+          modelDecisionBatch(
+            service.config,
+            AGENT_DECISION_INSTRUCTION,
+            batch.map(id => ({ id, ...prepared.get(id).input }))
+          )
+        )) {
+          for (const [id, decision] of result) batchDecisions.set(id, decision);
+          classifiedCount += batch.length;
+          send({
+            type: 'stage',
+            message: `${classifiedCount} email decisions ready; sorting completed decisions`,
+            inspected: decisions.length,
+            total: ids.length
+          });
+          yield* batch;
+        }
+        for (const id of window) if (prepared.get(id) && !eligible.includes(id)) yield id;
+      }
+    }
+    for await (const messageId of decisionOrder()) {
       await guard();
       if (
         infer !== modelDecision &&
@@ -798,28 +857,6 @@ async function runAgentInternal(
         (mode === 'daily' && (!latest.rules.daily || dailyIsPaused(latest.rules)))
       )
         throw new Error('Preferences changed. Agent stopped; remaining emails were left unchanged.');
-      if (infer === modelDecision && !prepared.has(messageId)) {
-        const window = ids.slice(index, index + 20);
-        send({
-          type: 'stage',
-          message: `Reading the next ${window.length} emails`,
-          inspected: decisions.length,
-          total: ids.length
-        });
-        const reserved = [];
-        for (const candidate of window) {
-          if (
-            mode !== 'held' &&
-            access.tier === 'free' &&
-            !(await reserveFreeEmail(service, id, candidate, access.recovering))
-          )
-            prepared.set(candidate, null);
-          else reserved.push(candidate);
-        }
-        await mapLimit(reserved, 6, async candidate => {
-          prepared.set(candidate, await prepare(candidate));
-        });
-      }
       const item = infer === modelDecision ? prepared.get(messageId) : await prepare(messageId);
       if (!item) continue;
       const { message, h, sender, scope, specificMemory, history } = item;
@@ -830,28 +867,6 @@ async function runAgentInternal(
       }
       send({ type: 'stage', message: 'Reading and deciding', inspected: decisions.length, total: ids.length });
       const instruction = AGENT_DECISION_INSTRUCTION;
-      if (infer === modelDecision && !protect && !batchDecisions.has(messageId)) {
-        const eligible = ids
-          .slice(index, Math.floor(index / 20) * 20 + 20)
-          .filter(
-            id =>
-              prepared.get(id) &&
-              !prepared.get(id).protect &&
-              prepared.get(id).message.labelIds?.includes('UNREAD') &&
-              !batchDecisions.has(id)
-          );
-        const batches = [];
-        for (let offset = 0; offset < eligible.length; offset += 10) batches.push(eligible.slice(offset, offset + 10));
-        await mapLimit(batches, 2, async batch => {
-          const results = await modelDecisionBatch(
-            service.config,
-            instruction,
-            batch.map(id => ({ id, ...prepared.get(id).input }))
-          );
-          for (const [id, result] of results) batchDecisions.set(id, result);
-        });
-        await guard();
-      }
       let raw = protect
         ? null
         : infer === modelDecision

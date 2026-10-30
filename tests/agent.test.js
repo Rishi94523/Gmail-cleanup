@@ -1428,3 +1428,83 @@ test('a valid unknown category never triggers a clarification retry, even with z
   assert.equal(result.get('sample').action, 'read');
   assert.equal(result.get('sample').preferenceCategory, 'unknown');
 });
+
+test('completed AI batches modify emails before a slow sibling fails, and the run remains partial', async t => {
+  const f = fixture(t, { keepPeople: false, topicActions: false, action: 'read' });
+  f.service.config.hackathonMode = true;
+  const base = structuredClone(f.mails.get('noise'));
+  f.mails.clear();
+  for (let i = 0; i < 20; i++) {
+    const mail = structuredClone(base);
+    mail.id = `sample-${i}`;
+    mail.payload.headers.find(h => h.name === 'Subject').value =
+      `${i < 10 ? 'Slow' : 'Fast'} synthetic announcement ${i}`;
+    f.mails.set(mail.id, mail);
+  }
+  let releaseSlow;
+  const slowGate = new Promise(resolve => {
+    releaseSlow = resolve;
+  });
+  let signalFast;
+  const fastApplied = new Promise(resolve => {
+    signalFast = resolve;
+  });
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    const inputs = JSON.parse(JSON.parse(options.body).messages[1].content);
+    if (inputs[0].subject.startsWith('Slow')) {
+      await slowGate;
+      return Response.json({}, { status: 503 });
+    }
+    return Response.json({
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: {
+            content: JSON.stringify({
+              decisions: inputs.map(item => ({
+                id: item.id,
+                decision: {
+                  action: 'read',
+                  confidence: 1,
+                  preferenceCategory: 'product_announcements',
+                  categoryConfidence: 1,
+                  reason: 'Low-priority synthetic announcement'
+                }
+              }))
+            })
+          }
+        }
+      ]
+    });
+  };
+  let run;
+  try {
+    run = f.service.locked(f.id, guard =>
+      runAgent(f.service, f.id, guard, event => {
+        if (event.type === 'decision' && event.changed === 10) signalFast();
+      })
+    );
+    run.catch(() => {});
+    await Promise.race([
+      fastApplied,
+      new Promise((_, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Fast batch blocked by slow sibling')), 5000);
+        timeout.unref();
+      })
+    ]);
+    assert.equal(f.writes.length, 10);
+    assert.equal(f.mails.get('sample-0').labelIds.includes('UNREAD'), true);
+    assert.equal(f.mails.get('sample-10').labelIds.includes('UNREAD'), false);
+    releaseSlow();
+    await assert.rejects(run);
+    const saved = f.store.get('SELECT status,changed FROM runs WHERE account_id=?', f.id);
+    assert.equal(saved.status, 'needs_review');
+    assert.equal(saved.changed, 10);
+    assert.equal(f.writes.length, 10);
+  } finally {
+    releaseSlow();
+    if (run) await run.catch(() => {});
+    globalThis.fetch = previous;
+  }
+});
