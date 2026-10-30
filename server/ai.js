@@ -5,7 +5,10 @@ import { failure } from './failures.js';
 export function aiConfig(env = process.env) {
   if (env.AI_PROVIDER && env.AI_PROVIDER.trim().toLowerCase() !== 'nebius')
     throw new Error('This hackathon edition supports Nebius Token Factory only.');
+  const effort = env.NEBIUS_REASONING_EFFORT?.trim() || 'medium';
+  if (!['medium', 'regular'].includes(effort)) throw new Error('NEBIUS_REASONING_EFFORT must be medium or regular.');
   return {
+    aiReasoningEffort: effort,
     aiProvider: 'nebius',
     aiKey: env.NEBIUS_API_KEY?.trim() || '',
     aiModel: env.NEBIUS_MODEL?.trim() || 'nvidia/Nemotron-3.5-Super-VL'
@@ -26,10 +29,14 @@ async function chatJSONInternal(config, messages, fetcher = fetch, tools = []) {
   if (!config.aiKey) throw new Error(missingAIKey(config));
   const region = /^nvidia\/Nemotron-3-Ultra-/i.test(config.aiModel) ? 'us-central1' : 'us-north1';
   const url = `https://api.tokenfactory.${region}.nebius.com/v1/chat/completions`;
+  const mediumReasoning =
+    /Nemotron-3\.5-Super-VL/i.test(config.aiModel || '') && config.aiReasoningEffort !== 'regular';
+  const requestedReasoningEffort = mediumReasoning ? 'medium' : 'provider_default';
   const started = Date.now();
   let response;
   try {
-    // Explicitly override the provider's smaller default; retain default reasoning.
+    // NVIDIA's medium chat template plus Nebius's explicit effort selector.
+    // Thinking stays enabled; the existing output ceiling and timeout are unchanged.
     response = await fetcher(url, {
       method: 'POST',
       redirect: 'error',
@@ -39,6 +46,9 @@ async function chatJSONInternal(config, messages, fetcher = fetch, tools = []) {
         model: config.aiModel,
         max_tokens: 50000,
         temperature: 0,
+        ...(mediumReasoning
+          ? { reasoning_effort: 'medium', chat_template_kwargs: { enable_thinking: true, medium_effort: true } }
+          : {}),
         ...(tools.length ? { tools, tool_choice: 'auto' } : { response_format: { type: 'json_object' } }),
         messages
       })
@@ -81,6 +91,7 @@ async function chatJSONInternal(config, messages, fetcher = fetch, tools = []) {
     console.info(
       JSON.stringify({
         event: 'ai_request_complete',
+        requestedReasoningEffort,
         ...traceFields(),
         provider,
         model: config.aiModel,
