@@ -28,6 +28,11 @@ export async function createApp(options = {}) {
   const config = {
     hackathonMode: process.env.HACKATHON_MODE === 'true',
     schedulerAccount: process.env.SCHEDULER_SERVICE_ACCOUNT || '',
+    schedulerAudience: process.env.SCHEDULER_AUDIENCE || '',
+    redirectHosts: (process.env.REDIRECT_HOSTS || '')
+      .split(',')
+      .map(host => host.trim())
+      .filter(Boolean),
     port: Number(process.env.PORT || 3000),
     host: process.env.HOST || '127.0.0.1',
     appUrl: process.env.APP_URL || 'http://localhost:3000',
@@ -44,6 +49,24 @@ export async function createApp(options = {}) {
   const origin = new URL(config.appUrl).origin;
   if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(origin).hostname) && !origin.startsWith('https://'))
     throw new Error('APP_URL must use HTTPS outside localhost.');
+  const redirectHosts = new Set(
+    config.redirectHosts.map(host => {
+      const parsed = new URL(`https://${host}`);
+      if (
+        parsed.host !== host.toLowerCase() ||
+        parsed.pathname !== '/' ||
+        parsed.username ||
+        parsed.password ||
+        parsed.search ||
+        parsed.hash
+      )
+        throw new Error('REDIRECT_HOSTS must contain only comma-separated hostnames.');
+      return parsed.host;
+    })
+  );
+  const schedulerOrigin = new URL(config.schedulerAudience || origin);
+  if (config.schedulerAudience && config.schedulerAudience !== schedulerOrigin.origin)
+    throw new Error('SCHEDULER_AUDIENCE must be an origin without a path or trailing slash.');
   if (process.env.K_SERVICE && !config.databaseUrl && !options.store)
     throw new Error('Cloud Run requires a shared Postgres DATABASE_URL. SQLite is local-only.');
   const store =
@@ -115,8 +138,25 @@ export async function createApp(options = {}) {
     let url;
     let session;
     try {
-      if (req.headers.host !== new URL(origin).host) return json(res, 403, { error: `Open the app at ${origin}.` });
       url = new URL(req.url, origin);
+      const host = req.headers.host?.toLowerCase();
+      if (host !== new URL(origin).host) {
+        // Keep signed scheduler calls on the original Run URL when the public
+        // site moves domains. Authentication below still checks its exact aud.
+        const schedulerCall =
+          url.pathname === '/internal/scheduler/tick' && req.method === 'POST' && host === schedulerOrigin.host;
+        const aliasHealth = redirectHosts.has(host) && url.pathname === '/api/health' && req.method === 'GET';
+        if (!schedulerCall && !aliasHealth) {
+          if (redirectHosts.has(host) && ['GET', 'HEAD'].includes(req.method)) {
+            const target = new URL(origin);
+            target.pathname = url.pathname;
+            target.search = url.search;
+            res.writeHead(308, { Location: target.href });
+            return res.end();
+          }
+          return json(res, 403, { error: `Open the app at ${origin}.` });
+        }
+      }
       if (url.pathname === '/internal/scheduler/tick') {
         if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
         if (!(await schedulerAuthorized(req.headers.authorization, config, options.verifySchedulerIdentity)))

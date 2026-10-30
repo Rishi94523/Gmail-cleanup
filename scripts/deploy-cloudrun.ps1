@@ -4,7 +4,8 @@ param(
     [ValidatePattern('^[a-z][a-z0-9-]{4,28}[a-z0-9]$')]
     [string]$ProjectId,
     [ValidatePattern('^[a-z]+-[a-z]+[0-9]{1,2}$')]
-    [string]$Region = 'us-central1'
+    [string]$Region = 'us-central1',
+    [string]$PublicUrl = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -49,8 +50,22 @@ $bindings = Get-Content -LiteralPath data/cloud-run-bindings.json -Raw | Convert
 $projectNumber = & gcloud.cmd projects describe $ProjectId --format='value(projectNumber)'
 if ($LASTEXITCODE -ne 0) { throw 'Could not resolve project number.' }
 $appUrl = "https://gmail-cleanup-web-${projectNumber}.${Region}.run.app"
+# Preserve a configured custom domain on subsequent deployments. An explicit
+# PublicUrl is available for the first cutover after DNS, TLS and OAuth are ready.
+$existingJson = & gcloud.cmd run services list --project=$ProjectId --region=$Region --filter='metadata.name=gmail-cleanup-web' --format=json
+if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the existing public URL.' }
+$existingServices = @($existingJson | ConvertFrom-Json)
+if ($existingServices.Count -gt 0) {
+    $savedUrl = $existingServices[0].spec.template.spec.containers[0].env | Where-Object name -eq 'APP_URL' | Select-Object -ExpandProperty value
+    if ($savedUrl) { $appUrl = $savedUrl }
+}
+if ($PublicUrl) {
+    $parsedUrl = [uri]$PublicUrl
+    if ($parsedUrl.Scheme -ne 'https' -or $parsedUrl.AbsolutePath -ne '/' -or $parsedUrl.Query -or $parsedUrl.Fragment -or $parsedUrl.UserInfo) { throw 'PublicUrl must be an HTTPS origin.' }
+    $appUrl = $parsedUrl.GetLeftPart([System.UriPartial]::Authority)
+}
 $environment = "APP_URL=$appUrl,HOST=0.0.0.0,SERVE_LANDING=true,ENABLE_LOCAL_SCHEDULER=false,HACKATHON_MODE=true,NEBIUS_MODEL=$($bindings.model)"
-Invoke-Gcloud run deploy gmail-cleanup-web --image=$image --project=$ProjectId --region=$Region --service-account=$runtimeAccount --allow-unauthenticated --port=8080 --cpu=1 --memory=512Mi --min-instances=0 --max-instances=2 --concurrency=8 --timeout=3600s --cpu-throttling "--set-env-vars=$environment" "--set-secrets=$($bindings.secrets)"
+Invoke-Gcloud run deploy gmail-cleanup-web --image=$image --project=$ProjectId --region=$Region --service-account=$runtimeAccount --allow-unauthenticated --port=8080 --cpu=1 --memory=512Mi --min-instances=0 --max-instances=2 --concurrency=8 --timeout=3600s --cpu-throttling "--update-env-vars=$environment" "--set-secrets=$($bindings.secrets)"
 $siteUrl = & gcloud.cmd run services describe gmail-cleanup-web --project=$ProjectId --region=$Region --format='value(status.url)'
 if ($LASTEXITCODE -ne 0 -or -not $siteUrl) { throw 'Deployment returned no service URL. Inspect Cloud Run status before retrying.' }
 $health = Invoke-RestMethod -Uri "$appUrl/api/health" -TimeoutSec 60

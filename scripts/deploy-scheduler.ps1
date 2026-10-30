@@ -11,7 +11,7 @@ Invoke-Gcloud run services add-iam-policy-binding gmail-cleanup-web --project=$P
 $projectNumber=& gcloud.cmd projects describe $ProjectId --format='value(projectNumber)'
 if ($LASTEXITCODE -ne 0) { throw 'Could not resolve project number.' }
 $appUrl="https://gmail-cleanup-web-${projectNumber}.${Region}.run.app"
-Invoke-Gcloud run services update gmail-cleanup-web --project=$ProjectId --region=$Region "--update-env-vars=HACKATHON_MODE=true,SCHEDULER_SERVICE_ACCOUNT=$identity"
+Invoke-Gcloud run services update gmail-cleanup-web --project=$ProjectId --region=$Region "--update-env-vars=HACKATHON_MODE=true,SCHEDULER_SERVICE_ACCOUNT=$identity,SCHEDULER_AUDIENCE=$appUrl"
 $job=& gcloud.cmd scheduler jobs list --project=$ProjectId --location=$Region --filter='name:gmail-cleanup-daily' --format='value(name)'
 if ($LASTEXITCODE -ne 0) { throw 'Could not inspect scheduler jobs.' }
 $verb=if($job){'update'}else{'create'}

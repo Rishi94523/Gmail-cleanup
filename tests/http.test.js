@@ -71,6 +71,59 @@ test('unconfigured app serves real setup state, secure headers, and no invented 
   assert.equal((await call('/.env')).status, 404);
 });
 
+test('custom-domain aliases redirect browser paths without trusting arbitrary hosts or replaying writes', async t => {
+  const { call } = await setup(t, false, {
+    appUrl: 'https://cleanmyinbox.example',
+    redirectHosts: ['legacy.run.app', 'www.cleanmyinbox.example'],
+    schedulerAudience: 'https://legacy.run.app'
+  });
+  const old = { headers: { Host: 'legacy.run.app' } };
+  const response = await call('/app?auth=connected', old);
+  assert.equal(response.status, 308);
+  assert.equal(response.headers.get('location'), 'https://cleanmyinbox.example/app?auth=connected');
+  assert.equal(response.headers.get('set-cookie'), null);
+  assert.equal((await call('/', { headers: { Host: 'www.cleanmyinbox.example' } })).status, 308);
+  assert.equal((await call('/', { headers: { Host: 'attacker.example' } })).status, 403);
+  assert.equal((await call('/api/rules', { method: 'POST', ...old })).status, 403);
+  assert.equal((await call('/api/health', old)).status, 200);
+  assert.equal((await call('/', { headers: { Host: 'cleanmyinbox.example' } })).status, 200);
+  // Absolute-form request targets must never control the redirect origin.
+  const target = await call('//attacker.example/app?x=1', old);
+  assert.equal(target.headers.get('location'), 'https://cleanmyinbox.example/app?x=1');
+});
+
+test('custom-domain migration preserves signed scheduler access through its original host and audience', async t => {
+  let ticks = 0;
+  const { app, call } = await setup(
+    t,
+    true,
+    {
+      appUrl: 'https://cleanmyinbox.example',
+      scheduler: false,
+      schedulerAudience: 'https://legacy.run.app',
+      schedulerAccount: 'cron@example.invalid',
+      redirectHosts: ['legacy.run.app']
+    },
+    {
+      verifySchedulerIdentity: async (token, audience) => {
+        assert.equal(audience, 'https://legacy.run.app');
+        return { email_verified: true, email: token === 'valid' ? 'cron@example.invalid' : 'wrong@example.invalid' };
+      }
+    }
+  );
+  app.service.daily = async () => {
+    ticks++;
+  };
+  const send = token =>
+    call('/internal/scheduler/tick', {
+      method: 'POST',
+      headers: { Host: 'legacy.run.app', Authorization: `Bearer ${token}` }
+    });
+  assert.equal((await send('wrong')).status, 401);
+  assert.equal((await send('valid')).status, 200);
+  assert.equal(ticks, 1);
+});
+
 test('answer HTTP request saves then cleans its held subset before responding without an inbox sweep', async t => {
   const messages = new Map(
     ['held', 'unrelated'].map(id => [
