@@ -325,6 +325,7 @@ test('discovery rejects invented career questions and caches the evidence-backed
                     messageId: 'noise',
                     category: 'sales_discounts',
                     question: 'Do you want sales?',
+                    minAgeDays: 15,
                     reason: 'A weekend sale appears in the sample.'
                   }
                 ]
@@ -340,6 +341,11 @@ test('discovery rejects invented career questions and caches the evidence-backed
     const result = await learnInbox(f.service, f.id, true, 'nebius');
     assert.ok(!result.evidenceCategories.includes('job_opportunities'));
     assert.ok(result.evidenceCategories.includes('sales_discounts'));
+    const ordinaryQuestion = f.crypto.open(
+      f.store.get("SELECT payload FROM agent_questions WHERE scope_hash='category:sales_discounts'").payload
+    );
+    assert.equal(ordinaryQuestion.minAgeDays, 0);
+    assert.doesNotMatch(ordinaryQuestion.question, /older than/);
     const questions = f.store.all('SELECT scope_hash FROM agent_questions');
     assert.deepEqual(
       questions.map(q => q.scope_hash),

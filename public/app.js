@@ -641,7 +641,7 @@ async function loadLearning() {
 function renderLearning() {
   const count = learningState.questionsTotal ?? learningState.questions.length;
   $('#question-count').textContent = number(count);
-  $('#question-notice').hidden = count === 0;
+  $('#question-notice').hidden = true;
   $('#question-notice-title').textContent =
     `${number(count)} ${count === 1 ? 'question from your agent' : 'questions from your agent'}`;
   $('#questions-tray').innerHTML = count
@@ -655,41 +655,41 @@ function renderLearning() {
         'You’re all caught up.',
         'Questions about uncertain mail will wait here. The agent leaves those emails alone.'
       );
+  $('#overview-pending-questions').hidden = count === 0;
+  $('#overview-questions-tray').innerHTML = count ? $('#questions-tray').innerHTML : '';
   renderPreferenceList();
-  $('#questions-tray')
-    .querySelectorAll('[data-question]')
-    .forEach(form => {
-      const question = learningState.questions.find(question => question.id === form.dataset.question);
-      const write = document.createElement('button');
-      write.type = 'button';
-      write.className = 'text-button';
-      write.textContent = 'Or write my own answer';
-      form.append(write);
-      write.onclick = () => {
-        const hidden = [...form.querySelectorAll('.question-option'), form.querySelector('button')];
-        hidden.forEach(element => {
-          element.hidden = true;
-        });
-        write.hidden = true;
-        const custom = document.createElement('div');
-        form.append(custom);
-        writePreference(custom, {
-          question,
-          request,
-          onSaved: async result => {
-            await refresh(true);
-            toast(answerCleanupMessage(result));
-          },
-          onCancel: () => {
-            custom.remove();
-            hidden.forEach(element => {
-              element.hidden = false;
-            });
-            write.hidden = false;
-          }
-        });
-      };
-    });
+  $$('#questions-tray [data-question], #overview-questions-tray [data-question]').forEach(form => {
+    const question = learningState.questions.find(question => question.id === form.dataset.question);
+    const write = document.createElement('button');
+    write.type = 'button';
+    write.className = 'text-button';
+    write.textContent = 'Or write my own answer';
+    form.append(write);
+    write.onclick = () => {
+      const hidden = [...form.querySelectorAll('.question-option'), form.querySelector('button')];
+      hidden.forEach(element => {
+        element.hidden = true;
+      });
+      write.hidden = true;
+      const custom = document.createElement('div');
+      form.append(custom);
+      writePreference(custom, {
+        question,
+        request,
+        onSaved: async result => {
+          await refresh(true);
+          toast(answerCleanupMessage(result));
+        },
+        onCancel: () => {
+          custom.remove();
+          hidden.forEach(element => {
+            element.hidden = false;
+          });
+          write.hidden = false;
+        }
+      });
+    };
+  });
   renderDiscovery(learningState.discovery);
   if (state?.connected) renderExceptions();
 }
@@ -760,7 +760,7 @@ function mountPreferenceComposer(container = $('#preference-composer'), fieldId)
 }
 mountPreferenceComposer();
 mountPreferenceComposer($('#overview-preference-composer'), 'overview-preference-notes');
-$('#questions-tray').addEventListener('submit', event => {
+function answerQuestion(event) {
   event.preventDefault();
   const form = event.target.closest('[data-question]');
   if (!form) return;
@@ -782,7 +782,9 @@ $('#questions-tray').addEventListener('submit', event => {
           : answerCleanupMessage(result)
     );
   });
-});
+}
+for (const tray of [$('#questions-tray'), $('#overview-questions-tray')])
+  tray.addEventListener('submit', answerQuestion);
 $('#learned-preferences').addEventListener('submit', event => {
   event.preventDefault();
   const form = event.target.closest('[data-memory]');

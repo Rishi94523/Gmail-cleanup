@@ -181,7 +181,20 @@ try {
     'Mobile questions overflow'
   );
   await page.screenshot({ path: resolve(output, 'questions-mobile.png'), fullPage: true });
-  await page.getByRole('button', { name: 'Or write my own answer' }).click();
+  await page.getByRole('button', { name: 'Overview', exact: true }).click();
+  assert.equal(await page.locator('#overview-pending-questions').isVisible(), true);
+  assert.equal(
+    await page.evaluate(() =>
+      Boolean(
+        document
+          .querySelector('#overview-pending-questions')
+          .compareDocumentPosition(document.querySelector('#overview-preference-composer')) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+      )
+    ),
+    true
+  );
+  await page.locator('#overview-questions-tray').getByRole('button', { name: 'Or write my own answer' }).click();
   await page
     .getByRole('textbox', { name: 'Your written preference' })
     .fill('Mark these read after 90 days, except Apple announcements.');
@@ -190,6 +203,7 @@ try {
   assert.equal(tray.memories.length, 0);
   await page.getByRole('button', { name: /Save this preference/ }).click();
   await page.waitForFunction(() => document.querySelector('#question-count').textContent === '0');
+  assert.equal(await page.locator('#overview-pending-questions').isVisible(), false);
   assert.match(await page.locator('#toast').textContent(), /2 held emails checked.*1 tidied/);
   assert.equal(ran, false, 'Answer follow-up must not start a general inbox run');
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();

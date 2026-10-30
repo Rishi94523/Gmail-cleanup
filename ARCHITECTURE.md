@@ -51,3 +51,5 @@ Cleanup batches now drain in completion order: each fully validated batch is app
 The deployed model can be selected with `NEBIUS_MODEL=nvidia/Nemotron-3-Ultra-550b-a55b`, served from the us-central1 endpoint. This is the Ultra 550B ID returned by the Nebius catalog; the Super-only medium chat-template setting is not sent to Ultra. Ultra currently uses provider-default reasoning, with the same 120-second timeout and 50,000-token ceiling.
 
 Uncertain decisions are included in kept counts. The waiting count is set only when an email is associated with an actionable saved preference question, rather than inferred from words in a reason. UI wording uses awaiting your answer for this subset. Ordinary age-based discovery suggestions use 15 days; explicit saved ages and the 30-day bank/security protection are unchanged.
+
+Pending questions are rendered and answerable above the Overview preference composer as well as on Questions. Ordinary discovery topics use no age threshold; an unsolicited model-proposed age for an ordinary topic is normalized to zero before storing the question. Explicit user-written ages remain editable; bank/security protections remain separate.

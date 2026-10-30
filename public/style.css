@@ -2096,3 +2096,10 @@ div.preference-card {
     padding: 18px;
   }
 }
+
+#overview-pending-questions {
+  margin: 28px 0;
+}
+#overview-pending-questions h2 {
+  margin-bottom: 18px;
+}
