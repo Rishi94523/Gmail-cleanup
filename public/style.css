@@ -14,6 +14,16 @@
   background: var(--paper);
   font-synthesis: none;
 }
+.workspace-legal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  font-size: 16px;
+}
+.workspace-legal a {
+  color: var(--ink);
+  text-underline-offset: 4px;
+}
 * {
   box-sizing: border-box;
 }

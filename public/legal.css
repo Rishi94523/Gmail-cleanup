@@ -1,0 +1,166 @@
+:root {
+  color-scheme: light;
+  font-family: 'Trebuchet MS', 'Segoe UI', sans-serif;
+  color: #263e35;
+  background: #f8f9f5;
+  font-synthesis: none;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+a {
+  color: #315e49;
+  text-underline-offset: 4px;
+  overflow-wrap: anywhere;
+}
+a:hover {
+  text-decoration-thickness: 2px;
+}
+a:focus-visible {
+  outline: 3px solid #839c62;
+  outline-offset: 5px;
+}
+.skip {
+  position: absolute;
+  left: 20px;
+  top: -100px;
+  background: #f8f9f5;
+  padding: 14px;
+  z-index: 2;
+}
+.skip:focus {
+  top: 12px;
+}
+.legal-header,
+footer {
+  max-width: 1100px;
+  margin: auto;
+  padding: 30px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+.legal-header {
+  border-bottom: 1px solid #dce4d5;
+}
+.wordmark {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -1.5px;
+  text-decoration: none;
+}
+.wordmark span {
+  color: #819d5c;
+}
+main {
+  max-width: 820px;
+  margin: 76px auto 90px;
+  padding: 0 32px;
+}
+h1,
+h2 {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-weight: 400;
+  letter-spacing: -0.035em;
+}
+h1 {
+  font-size: clamp(42px, 7vw, 70px);
+  line-height: 1.08;
+  margin: 18px 0;
+}
+h2 {
+  font-size: clamp(27px, 4vw, 34px);
+  line-height: 1.2;
+  margin: 0 0 20px;
+}
+.eyebrow {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: #5c7355;
+}
+.updated {
+  font-size: 15px;
+  color: #586b60;
+  margin: 24px 0;
+}
+.lead {
+  font-size: 21px;
+  line-height: 1.7;
+}
+.contents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 26px;
+  padding: 26px 0;
+  border-block: 1px solid #dce4d5;
+  margin-top: 30px;
+  font-size: 16px;
+}
+section {
+  margin-top: 48px;
+  scroll-margin-top: 28px;
+}
+section p,
+li {
+  font-size: 18px;
+  line-height: 1.8;
+}
+section p {
+  margin: 0 0 18px;
+}
+ul {
+  padding-left: 24px;
+}
+li {
+  padding-left: 6px;
+  margin-bottom: 14px;
+}
+strong {
+  font-weight: 700;
+}
+code {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+footer {
+  border-top: 1px solid #dce4d5;
+  font-size: 16px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 20px 32px;
+}
+@media (max-width: 520px) {
+  .legal-header,
+  footer {
+    padding: 24px;
+  }
+  .legal-header > a:last-child {
+    font-size: 15px;
+  }
+  .wordmark {
+    font-size: 27px;
+  }
+  main {
+    margin: 48px auto 64px;
+    padding: 0 24px;
+  }
+  .lead {
+    font-size: 20px;
+  }
+  section p,
+  li {
+    font-size: 17px;
+    line-height: 1.75;
+  }
+  .contents {
+    gap: 16px 22px;
+  }
+  section {
+    margin-top: 38px;
+  }
+}

@@ -581,6 +581,11 @@ function App() {
           inboxclean<span className="logo-dot">.</span>
         </a>
         <p>Thoughtfully built. A little lighter.</p>
+        <nav className="footer-legal" aria-label="Legal and contact">
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+          <a href="mailto:rishidv2005@gmail.com">Contact</a>
+        </nav>
         <span>© {new Date().getFullYear()} Inboxclean · A quieter inbox, every day.</span>
       </footer>
     </>

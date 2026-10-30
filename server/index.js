@@ -88,6 +88,13 @@ export async function createApp(options = {}) {
     ['/onboarding.css', ['onboarding.css', 'text/css']],
     ['/preference-answer.js', ['preference-answer.js', 'text/javascript']]
   ]);
+  const publicDocuments = new Map([
+    ['/privacy', ['privacy.html', 'text/html']],
+    ['/terms', ['terms.html', 'text/html']],
+    ['/legal.css', ['legal.css', 'text/css']],
+    ['/robots.txt', ['robots.txt', 'text/plain']],
+    ['/sitemap.xml', ['sitemap.xml', 'application/xml']]
+  ]);
   function cookie(value, maxAge = 2592000) {
     return `inboxclean_session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${origin.startsWith('https:') ? '; Secure' : ''}`;
   }
@@ -178,6 +185,13 @@ export async function createApp(options = {}) {
         } catch {
           return json(res, 503, { database: store.kind, connected: false });
         }
+      }
+      // Public disclosures work without a session, Gmail, or a database lookup.
+      if (['GET', 'HEAD'].includes(req.method) && publicDocuments.has(url.pathname)) {
+        const [file, type] = publicDocuments.get(url.pathname);
+        const content = await readFile(resolve(root, file));
+        res.writeHead(200, { 'Content-Type': `${type}; charset=utf-8` });
+        return res.end(req.method === 'HEAD' ? undefined : content);
       }
       const token = req.headers.cookie
         ?.split(';')

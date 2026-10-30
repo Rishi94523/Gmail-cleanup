@@ -71,6 +71,35 @@ test('unconfigured app serves real setup state, secure headers, and no invented 
   assert.equal((await call('/.env')).status, 404);
 });
 
+test('privacy and terms are public documents without session or database access', async t => {
+  const { app, call } = await setup(t);
+  app.store.get = () => {
+    throw new Error('Public legal pages must not access account sessions');
+  };
+  for (const [path, heading] of [
+    ['/privacy', 'Privacy policy.'],
+    ['/terms', 'Terms of service.']
+  ]) {
+    const response = await call(path, { headers: { Cookie: 'inboxclean_session=unused-fixture' } });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('set-cookie'), null);
+    const html = await response.text();
+    assert.ok(html.includes(heading));
+    assert.match(html, /rishidv2005@gmail\.com/);
+    assert.match(html, /href="\/privacy"|href="\/terms"/);
+    const head = await call(path, { method: 'HEAD' });
+    assert.equal(head.status, 200);
+    assert.equal(await head.text(), '');
+  }
+  const privacy = await (await call('/privacy')).text();
+  assert.match(privacy, /Limited Use/);
+  assert.match(privacy, /Nebius Token Factory/);
+  assert.match(privacy, /does not promise zero-retention/);
+  assert.equal((await call('/legal.css')).status, 200);
+  assert.match(await (await call('/robots.txt')).text(), /Disallow: \/api\//);
+  assert.match(await (await call('/sitemap.xml')).text(), /https:\/\/cleanmyinbox\.space\/privacy/);
+});
+
 test('custom-domain aliases redirect browser paths without trusting arbitrary hosts or replaying writes', async t => {
   const { call } = await setup(t, false, {
     appUrl: 'https://cleanmyinbox.example',

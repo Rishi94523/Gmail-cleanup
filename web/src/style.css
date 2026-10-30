@@ -13,6 +13,15 @@
   --green: #345c43;
   --line: #dfe5d6;
 }
+.footer-legal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 16px;
+}
+.footer-legal a {
+  text-underline-offset: 4px;
+}
 * {
   box-sizing: border-box;
 }

@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /app
+Disallow: /api/
+Disallow: /auth/
+Disallow: /internal/
+
+Sitemap: https://cleanmyinbox.space/sitemap.xml

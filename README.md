@@ -83,6 +83,10 @@ OAuth refresh tokens, email context and preference memories are encrypted at res
 
 ## Submission and remaining work
 
+Public disclosures are available without login at [Privacy policy](https://cleanmyinbox.space/privacy) and [Terms of service](https://cleanmyinbox.space/terms), with links in both footers and before AI consent. They describe the implemented Gmail actions, Nebius inference, current retention, account deletion, and unsubscribe/undo limitations. The contact is the existing support address, `rishidv2005@gmail.com`. Review these disclosures whenever providers, retention, pricing or features change; publishing them is not Google verification or a legal compliance certification.
+
+The display brand remains **Inboxclean** on `cleanmyinbox.space`. The homepage includes a descriptive title, canonical URL, social metadata, and a sitemap. The robots file excludes workspace/auth/API routes from crawling; it is not an access-control mechanism.
+
 This public repository is the hackathon source. Keep a tag pointing to the exact submitted commit; build a separate private repository later if commercial/payment work needs to stay private.
 
 The live OAuth app currently accepts configured Google test users. Public Gmail onboarding still needs Google's applicable verification process. Payment checkout, browser-based unsubscribe and bulk backlog processing are outside this hackathon version. The [official rules](https://nebiusglobalaihackathon.devpost.com/rules) also require an open-source license. License selection is pending; this must be resolved before submission. A real submission demo video and the event's required feedback must be prepared separately; the landing animation is an illustrative product demo.
