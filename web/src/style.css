@@ -1239,6 +1239,11 @@ h2 {
   }
   .site-header {
     gap: 15px;
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 110px;
+    padding-top: 24px;
+    padding-bottom: 24px;
   }
   .logo {
     font-size: 22px;

@@ -51,6 +51,14 @@ body.onboarding-open > #toast {
   text-decoration: none;
   letter-spacing: -1.3px;
 }
+@media (max-width: 420px) {
+  .ob-header {
+    gap: 12px;
+  }
+  .ob-header .wordmark {
+    font-size: 20px;
+  }
+}
 .ob-connected {
   font-size: 14px;
   display: flex;

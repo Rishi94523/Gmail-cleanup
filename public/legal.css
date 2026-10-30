@@ -46,6 +46,7 @@ footer {
 }
 .legal-header {
   border-bottom: 1px solid #dce4d5;
+  flex-wrap: wrap;
 }
 .wordmark {
   font-size: 30px;

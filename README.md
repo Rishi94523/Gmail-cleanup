@@ -1,4 +1,4 @@
-# Inboxclean
+# Clean My Inbox
 
 A Gmail agent that learns what matters to you, then marks low-priority email as read or archives it. Built for the **Nebius × NVIDIA Global AI Hackathon**, using **NVIDIA Nemotron 3.5 Super VL through Nebius Token Factory**.
 
@@ -77,7 +77,7 @@ OAuth refresh tokens, email context and preference memories are encrypted at res
 
 ### Prompt caching and model speed
 
-[Nebius prompt caching](https://docs.tokenfactory.nebius.com/cached-tokens) is implicit and best-effort: no opt-in flag, explicit cache marker, or TTL is needed. Inboxclean puts stable instructions first, then shared user preferences, then individual emails. Discovery dates and user notes are separate from system instructions. Identical batch-wide context is sent once; email-specific instructions and exceptions remain attached to their email. Existing logs report `cachedPromptTokens` from the API, so a zero-hit request remains visible rather than being assumed cached.
+[Nebius prompt caching](https://docs.tokenfactory.nebius.com/cached-tokens) is implicit and best-effort: no opt-in flag, explicit cache marker, or TTL is needed. Clean My Inbox puts stable instructions first, then shared user preferences, then individual emails. Discovery dates and user notes are separate from system instructions. Identical batch-wide context is sent once; email-specific instructions and exceptions remain attached to their email. Existing logs report `cachedPromptTokens` from the API, so a zero-hit request remains visible rather than being assumed cached.
 
 `npm run ai:benchmark` makes three streaming requests per model (Super 3.5 VL and Ultra 3), using the same ten synthetic emails and the production prompt/request builders. It never reads the database or Gmail. It records first-token latency, time to visible JSON, total duration, provider-reported token counts, approximate generation tokens/second and cache hits in ignored `data/nebius-benchmark-*.json` files. Super uses the application's medium reasoning setting; Ultra uses its provider default. Repeats test prefix reuse, but the first call is not guaranteed cold. Streaming token speed includes reasoning tokens when reported and does not measure classification accuracy, production capacity, or the whole Gmail cleanup. Set `BENCHMARK_ROUNDS` to 1–10 to change the request count; inference uses your normal API credits.
 
@@ -85,7 +85,7 @@ OAuth refresh tokens, email context and preference memories are encrypted at res
 
 Public disclosures are available without login at [Privacy policy](https://cleanmyinbox.space/privacy) and [Terms of service](https://cleanmyinbox.space/terms), with links in both footers and before AI consent. They describe the implemented Gmail actions, Nebius inference, current retention, account deletion, and unsubscribe/undo limitations. The contact is the existing support address, `rishidv2005@gmail.com`. Review these disclosures whenever providers, retention, pricing or features change; publishing them is not Google verification or a legal compliance certification.
 
-The display brand remains **Inboxclean** on `cleanmyinbox.space`. The homepage includes a descriptive title, canonical URL, social metadata, and a sitemap. The robots file excludes workspace/auth/API routes from crawling; it is not an access-control mechanism.
+The display brand is **Clean My Inbox** on `cleanmyinbox.space`. The homepage includes a descriptive title, canonical URL, social metadata, and a sitemap. The robots file excludes workspace/auth/API routes from crawling; it is not an access-control mechanism.
 
 This public repository is the hackathon source. Keep a tag pointing to the exact submitted commit; build a separate private repository later if commercial/payment work needs to stay private.
 

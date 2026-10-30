@@ -27,7 +27,7 @@ if (-not $repository) { Invoke-Gcloud artifacts repositories create gmail-cleanu
 $runtimeAccount = "gmail-cleanup-web@${ProjectId}.iam.gserviceaccount.com"
 $accounts = & gcloud.cmd iam service-accounts list --project=$ProjectId --filter="email:$runtimeAccount" --format='value(email)'
 if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the runtime identity.' }
-if (-not $accounts) { Invoke-Gcloud iam service-accounts create gmail-cleanup-web --project=$ProjectId --display-name='Inboxclean web service' }
+if (-not $accounts) { Invoke-Gcloud iam service-accounts create gmail-cleanup-web --project=$ProjectId --display-name='Clean My Inbox web service' }
 $buildAccount = "gmail-cleanup-build@${ProjectId}.iam.gserviceaccount.com"
 $buildAccounts = & gcloud.cmd iam service-accounts list --project=$ProjectId --filter="email:$buildAccount" --format='value(email)'
 if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the build identity.' }

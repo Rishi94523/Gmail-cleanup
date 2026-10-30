@@ -6,7 +6,7 @@ Invoke-Gcloud services enable cloudscheduler.googleapis.com --project=$ProjectId
 $identity="gmail-cleanup-scheduler@${ProjectId}.iam.gserviceaccount.com"
 $existing=& gcloud.cmd iam service-accounts list --project=$ProjectId --filter="email:$identity" --format='value(email)'
 if ($LASTEXITCODE -ne 0) { throw 'Could not inspect scheduler identity.' }
-if (-not $existing) { Invoke-Gcloud iam service-accounts create gmail-cleanup-scheduler --project=$ProjectId --display-name='Inboxclean daily scheduler' }
+if (-not $existing) { Invoke-Gcloud iam service-accounts create gmail-cleanup-scheduler --project=$ProjectId --display-name='Clean My Inbox daily scheduler' }
 Invoke-Gcloud run services add-iam-policy-binding gmail-cleanup-web --project=$ProjectId --region=$Region --member="serviceAccount:$identity" --role=roles/run.invoker --quiet
 $projectNumber=& gcloud.cmd projects describe $ProjectId --format='value(projectNumber)'
 if ($LASTEXITCODE -ne 0) { throw 'Could not resolve project number.' }

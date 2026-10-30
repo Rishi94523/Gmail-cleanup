@@ -550,7 +550,7 @@ export async function createApp(options = {}) {
     config,
     start() {
       server.listen(config.port, config.host, () =>
-        console.log(`Inboxclean is ready at ${origin}${ready ? '' : ' — Gmail setup required'}`)
+        console.log(`Clean My Inbox is ready at ${origin}${ready ? '' : ' — Gmail setup required'}`)
       );
       if (config.scheduler) {
         timer = setInterval(runTick, 60000);

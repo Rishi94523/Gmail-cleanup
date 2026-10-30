@@ -286,11 +286,11 @@ function App() {
         Skip to content
       </a>
       <header className="site-header wrap">
-        <a href="#" className="logo" aria-label="Inboxclean home">
+        <a href="#" className="logo" aria-label="Clean My Inbox home">
           <span>
             <Icon name="mail" size={20} />
           </span>
-          inboxclean<span className="logo-dot">.</span>
+          Clean My Inbox<span className="logo-dot">.</span>
         </a>
         <nav aria-label="Main navigation">
           <a href="#how-it-works">How it works</a>
@@ -578,7 +578,7 @@ function App() {
           <span>
             <Icon name="mail" size={18} />
           </span>
-          inboxclean<span className="logo-dot">.</span>
+          Clean My Inbox<span className="logo-dot">.</span>
         </a>
         <p>Thoughtfully built. A little lighter.</p>
         <nav className="footer-legal" aria-label="Legal and contact">
@@ -586,7 +586,7 @@ function App() {
           <a href="/terms">Terms</a>
           <a href="mailto:rishidv2005@gmail.com">Contact</a>
         </nav>
-        <span>© {new Date().getFullYear()} Inboxclean · A quieter inbox, every day.</span>
+        <span>© {new Date().getFullYear()} Clean My Inbox · A quieter inbox, every day.</span>
       </footer>
     </>
   );

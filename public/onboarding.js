@@ -11,7 +11,7 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
   root.id = 'onboarding';
   root.hidden = true;
   root.setAttribute('aria-label', 'Set up your inbox agent');
-  root.innerHTML = `<header class="ob-header"><a class="wordmark" href="/">inboxclean<span class="brand-dot">.</span></a><span class="ob-connected"><i></i> Gmail connected</span></header><main class="ob-main"><div class="ob-panel" id="ob-panel"></div></main><footer class="ob-footer">Your first 100 unread emails in Primary.</footer>`;
+  root.innerHTML = `<header class="ob-header"><a class="wordmark" href="/">Clean My Inbox<span class="brand-dot">.</span></a><span class="ob-connected"><i></i> Gmail connected</span></header><main class="ob-main"><div class="ob-panel" id="ob-panel"></div></main><footer class="ob-footer">Your first 100 unread emails in Primary.</footer>`;
   document.body.append(root);
   const panel = root.querySelector('#ob-panel');
   let active = false;

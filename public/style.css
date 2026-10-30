@@ -133,6 +133,11 @@ textarea {
 .brand-dot {
   color: #8caa65;
 }
+.sidebar .wordmark {
+  font-size: 19px;
+  padding-inline: 0;
+  letter-spacing: -0.8px;
+}
 .workspace-label {
   font-size: 14px;
   font-weight: 700;
