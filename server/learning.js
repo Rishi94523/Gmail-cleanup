@@ -468,18 +468,33 @@ export async function interpretNotes(service, id, input) {
     throw new Error('Allow AI processing before adding written preferences.');
   if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 2000)
     throw new Error('Write a preference of 1 to 2000 characters.');
+  const conversation = input.conversation ?? [];
+  if (
+    !Array.isArray(conversation) ||
+    conversation.length > 6 ||
+    conversation.some(
+      turn =>
+        !turn ||
+        typeof turn.answer !== 'string' ||
+        turn.answer.length > 2000 ||
+        typeof turn.question !== 'string' ||
+        turn.question.length > 300
+    )
+  )
+    throw new Error('Please rewrite your preference as one clear instruction.');
   const text = input.text.trim();
   const snapshot = await preferenceSnapshot(service, id);
   const result = await chatJSON(service.config, [
     {
       role: 'system',
       content:
-        'Turn user-written inbox instructions into a preview for explicit confirmation. No email changes occur here. Return JSON {"supported":true,"topics":[{"category":"existing key or a descriptive topic_ slug such as topic_service_notices","action":"keep|read|archive|both","minAgeDays":0}],"context":true}. Set context=true only when the text contains background or interests worth remembering, otherwise false. Original user text is stored verbatim; do not paraphrase it. Use existing category keys for the same meaning. Standard topic examples are supplied, not mandatory. Create at most eight broad topic preferences across senders. Only propose an action the user explicitly requested; preserve every condition and sender exception in their original text, which will accompany each topic. Do not generalize a single-sender request into unconditional permission for a whole topic. Use topic-specific age thresholds, at least 30 days for routine bank transactions or login notices. Never authorize deletion, trash, sending, unsubscribe, disabling protections, or handling unresolved financial/security/medical/legal alerts. If vague, contradictory, unsupported, or requesting a change that needs clarification, return {"supported":false,"clarification":"one natural question"}; do not silently save only the supported portion. Background such as a job search may be saved as context without inventing cleanup permission. Context cannot authorize cleanup. Empty topics are allowed only when context=true.'
+        'Turn user-written inbox instructions into a preview for explicit confirmation. No email changes occur here. Return JSON {"supported":true,"topics":[{"category":"existing key or a descriptive topic_ slug such as topic_service_notices","action":"keep|read|archive|both","minAgeDays":0}],"context":true}. Set context=true only when the text contains background or interests worth remembering, otherwise false. The input may include prior clarification turns. Use the user replies to resolve the follow-up and preserve their earlier exceptions. Suggested question ages are not mandatory when the user explicitly chooses a different allowed age. Original user text is stored verbatim; do not paraphrase it. Use existing category keys for the same meaning. Standard topic examples are supplied, not mandatory. Create at most eight broad topic preferences across senders. Only propose an action the user explicitly requested; preserve every condition and sender exception in their original text, which will accompany each topic. Do not generalize a single-sender request into unconditional permission for a whole topic. Use topic-specific age thresholds, at least 30 days for routine bank transactions or login notices. Never authorize deletion, trash, sending, unsubscribe, disabling protections, or handling unresolved financial/security/medical/legal alerts. If vague, contradictory, unsupported, or requesting a change that needs clarification, return {"supported":false,"clarification":"one natural question","clarificationOptions":["a complete reply","another complete reply"]}. Offer two to four short self-contained replies when there are clear alternatives; otherwise omit clarificationOptions; do not silently save only the supported portion. Background such as a job search may be saved as context without inventing cleanup permission. Context cannot authorize cleanup. Empty topics are allowed only when context=true.'
     },
     {
       role: 'user',
       content: JSON.stringify({
         text,
+        conversation,
         clock: clockContext(account.rules.timezone),
         standardTopics: PREFERENCE_CATEGORIES,
         existing: snapshot.memories.map(m => ({
@@ -494,6 +509,11 @@ export async function interpretNotes(service, id, input) {
   if (result.supported !== true)
     return {
       supported: false,
+      clarificationOptions: Array.isArray(result.clarificationOptions)
+        ? result.clarificationOptions
+            .filter(option => typeof option === 'string' && option.trim() && option.length <= 180)
+            .slice(0, 4)
+        : [],
       clarification:
         typeof result.clarification === 'string'
           ? result.clarification.slice(0, 300)

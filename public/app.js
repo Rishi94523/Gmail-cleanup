@@ -747,17 +747,19 @@ $('#preference-pagination').addEventListener('click', event => {
     renderPreferenceList();
   }
 });
-function mountPreferenceComposer() {
-  writeNotes($('#preference-composer'), {
+function mountPreferenceComposer(container = $('#preference-composer'), fieldId) {
+  writeNotes(container, {
     request,
+    fieldId,
     onSaved: async result => {
       await refresh(true);
-      mountPreferenceComposer();
+      mountPreferenceComposer(container, fieldId);
       toast(answerCleanupMessage(result));
     }
   });
 }
 mountPreferenceComposer();
+mountPreferenceComposer($('#overview-preference-composer'), 'overview-preference-notes');
 $('#questions-tray').addEventListener('submit', event => {
   event.preventDefault();
   const form = event.target.closest('[data-question]');

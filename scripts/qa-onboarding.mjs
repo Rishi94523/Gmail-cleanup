@@ -157,6 +157,19 @@ try {
       json = { status: 'saved' };
     } else if (path === '/api/agent/preferences/interpret') {
       const data = route.request().postDataJSON();
+      if (data.text.startsWith('For daily surveys') && !data.conversation?.length)
+        return route.fulfill({
+          json: {
+            supported: false,
+            clarification: 'Should survey emails be marked read immediately or after 15 days?',
+            clarificationOptions: ['Mark survey emails read immediately.', 'Mark survey emails read after 15 days.']
+          }
+        });
+      if (data.conversation?.length) {
+        assert.equal(data.conversation[0].answer, 'For daily surveys, mark them read.');
+        assert.match(data.text, /Mark survey emails read immediately/);
+        assert.doesNotMatch(data.text, /Should survey emails/);
+      }
       const survey = data.text.includes('survey');
       notesPreview = {
         supported: true,
@@ -366,6 +379,26 @@ try {
   await page.locator('#preference-search').fill('');
   await page.locator('[data-preference-page="1"]').click();
   assert.equal(await page.locator('.preference-row').count(), 1);
+  await page.locator('.nav-item[data-page=overview]').click();
+  const overview = page.locator('#overview-preference-composer');
+  await overview.locator('textarea').fill('For daily surveys, mark them read.');
+  await overview.getByRole('button', { name: /Review my instructions/ }).click();
+  await overview.locator('.clarification-thread').waitFor();
+  assert.equal(await overview.locator('textarea').inputValue(), '');
+  await overview.getByRole('button', { name: 'Mark survey emails read immediately.', exact: true }).click();
+  await overview.locator('.notes-preview').waitFor();
+  assert.equal(cleanups, 0);
+  await overview.getByRole('button', { name: /Save these preferences/ }).click();
+  await page.waitForFunction(() => document.querySelector('#overview-preference-notes').value === '');
+  assert.equal(cleanups, 0);
+  assert.match(
+    tray.memories.find(m => m.scope.category === 'surveys_feedback').instructions,
+    /For daily surveys.*\nMark survey/s
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await page.screenshot({ path: `${output}/overview-preferences-mobile.png`, fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 900 });
   state.schedulerActive = true;
   state.access.tier = 'hackathon';
   state.rules.daily = true;

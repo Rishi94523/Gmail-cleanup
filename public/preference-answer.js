@@ -105,19 +105,41 @@ export function writePreference(container, { question, request, onSaved, onCance
   render();
 }
 
-export function writeNotes(container, { request, onSaved, onSkip, initial = false }) {
+export function writeNotes(container, { request, onSaved, onSkip, initial = false, fieldId }) {
   let text = '';
+  const inputId = fieldId || (initial ? 'ob-notes' : 'preference-notes');
+  let history = [];
+  let choices = [];
   let proposal;
   let busy = false;
   function render(error = '') {
-    container.innerHTML = `<form class="preference-composer"><label for="${initial ? 'ob-notes' : 'preference-notes'}">${initial ? 'Anything your agent should keep in mind?' : 'Add or change a preference'}</label><textarea id="${initial ? 'ob-notes' : 'preference-notes'}" rows="3" maxlength="2000" placeholder="For example: Archive product announcements after 30 days, but keep Apple announcements." ${proposal ? 'readonly' : ''}>${escape(text)}</textarea>${proposal ? `<div class="notes-preview" aria-live="polite"><p>Here’s what I’ll remember:</p><ul>${proposal.topics.map(t => `<li><strong>${escape(t.scope.label)}</strong> · ${escape(actions[t.action])}${t.minAgeDays ? ` after ${t.minAgeDays} days` : ''}${t.replaces ? ' · replaces your current choice' : ''}</li>`).join('')}${proposal.context ? `<li>Remember your background and interests</li>` : ''}</ul><p class="notes-conditions">${escape(text)}</p></div>` : ''}<p class="custom-error" role="alert">${escape(error)}</p><div class="custom-buttons"><button class="primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Thinking…' : proposal ? 'Save these preferences' : 'Review my instructions'} →</button>${proposal ? '<button class="text-button" type="button" data-edit-notes>Edit my words</button>' : onSkip ? `<button class="text-button" type="button" data-skip-notes>${initial ? 'Nothing else, start cleanup' : 'Cancel'}</button>` : ''}</div><p class="custom-hint">${initial ? 'We’ll save your instructions before cleanup starts.' : 'If this answers a pending question, its held emails are rechecked immediately.'} Nothing is deleted.</p></form>`;
+    container.innerHTML = `<form class="preference-composer">${history.length && !proposal ? `<div class="clarification-thread" aria-label="Preference conversation">${history.map(turn => `<div class="clarification-user"><strong>You</strong><p>${escape(turn.answer)}</p></div><div class="clarification-agent"><strong>Your agent</strong><p>${escape(turn.question)}</p></div>`).join('')}</div>${choices.length ? `<div class="clarification-options" aria-label="Suggested replies">${choices.map((choice, index) => `<button type="button" class="secondary" data-notes-reply="${index}">${escape(choice)}</button>`).join('')}</div>` : ''}` : ''}<label for="${inputId}">${history.length && !proposal ? 'Your reply' : initial ? 'Anything your agent should keep in mind?' : 'Add or change a preference'}</label><textarea id="${inputId}" rows="3" maxlength="2000" placeholder="For example: Archive product announcements after 15 days, but keep Apple announcements." ${proposal ? 'readonly' : ''}>${escape(text)}</textarea>${proposal ? `<div class="notes-preview" aria-live="polite"><p>Here’s what I’ll remember:</p><ul>${proposal.topics.map(t => `<li><strong>${escape(t.scope.label)}</strong> · ${escape(actions[t.action])}${t.minAgeDays ? ` after ${t.minAgeDays} days` : ''}${t.replaces ? ' · replaces your current choice' : ''}</li>`).join('')}${proposal.context ? `<li>Remember your background and interests</li>` : ''}</ul><p class="notes-conditions">${escape(text)}</p></div>` : ''}<p class="custom-error" role="alert">${escape(error)}</p><div class="custom-buttons"><button class="primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Thinking…' : proposal ? 'Save these preferences' : history.length ? 'Send reply' : 'Review my instructions'} →</button>${proposal ? '<button class="text-button" type="button" data-edit-notes>Edit my words</button>' : onSkip ? `<button class="text-button" type="button" data-skip-notes>${initial ? 'Nothing else, start cleanup' : 'Cancel'}</button>` : ''}${history.length && !proposal ? '<button type="button" class="text-button" data-rewrite-notes>Rewrite my instructions</button>' : ''}</div><p class="custom-hint">${initial ? 'We’ll save your instructions before cleanup starts.' : 'If this answers a pending question, its held emails are rechecked immediately.'} Nothing is deleted.</p></form>`;
+    const conversation = container.querySelector('.clarification-thread');
+    if (conversation) conversation.scrollTop = conversation.scrollHeight;
     const form = container.querySelector('form');
+    form.querySelectorAll('[data-notes-reply]').forEach(button => {
+      button.onclick = () => {
+        if (busy) return;
+        text = choices[Number(button.dataset.notesReply)];
+        form.querySelector('textarea').value = text;
+        form.requestSubmit();
+      };
+    });
     const field = form.querySelector('textarea');
     field.oninput = () => {
       text = field.value;
     };
+    form.querySelector('[data-rewrite-notes]')?.addEventListener('click', () => {
+      text = [...history.map(turn => turn.answer), text.trim()].filter(Boolean).join('\n');
+      history = [];
+      choices = [];
+      render();
+    });
     form.querySelector('[data-edit-notes]')?.addEventListener('click', () => {
+      text = proposal.instructions || text;
       proposal = null;
+      history = [];
+      choices = [];
       render();
     });
     form.querySelector('[data-skip-notes]')?.addEventListener('click', () => onSkip());
@@ -125,9 +147,12 @@ export function writeNotes(container, { request, onSaved, onSkip, initial = fals
       event.preventDefault();
       if (busy) return;
       if (!text.trim()) {
-        if (initial && onSkip) return onSkip();
+        if (initial && onSkip && !history.length) return onSkip();
         return render('Write a preference first.');
       }
+      const combined = [...history.map(turn => turn.answer), text.trim()].join('\n');
+      if (!proposal && combined.length > 2000)
+        return render('Please keep your combined instructions under 2000 characters.');
       busy = true;
       form.querySelectorAll('button,textarea').forEach(el => {
         el.disabled = true;
@@ -138,13 +163,26 @@ export function writeNotes(container, { request, onSaved, onSkip, initial = fals
           const result = await request('/api/agent/preferences/save', { token: proposal.token });
           busy = false;
           text = '';
+          history = [];
+          choices = [];
           proposal = null;
           await onSaved(result);
         } else {
-          const result = await request('/api/agent/preferences/interpret', { text: text.trim() });
+          const result = await request('/api/agent/preferences/interpret', {
+            text: combined,
+            conversation: history.map(turn => ({ answer: turn.answer, question: turn.question }))
+          });
           busy = false;
-          if (!result.supported) return render(result.clarification);
-          proposal = result;
+          if (!result.supported) {
+            history.push({ answer: text.trim(), question: result.clarification });
+            text = '';
+            choices = result.clarificationOptions || [];
+            render();
+            container.querySelector('textarea').focus();
+            return;
+          }
+          text = combined;
+          proposal = { ...result, instructions: combined };
           render();
         }
       } catch (error) {

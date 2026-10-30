@@ -2079,3 +2079,20 @@ div.preference-card {
   margin-top: 5px;
   line-height: 1.6;
 }
+
+.overview-preferences {
+  margin: 28px 0;
+  padding: 26px;
+  background: #eef3e7;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+.overview-preferences .preference-composer > label {
+  font-size: 22px;
+  font-weight: 600;
+}
+@media (max-width: 760px) {
+  .overview-preferences {
+    padding: 18px;
+  }
+}

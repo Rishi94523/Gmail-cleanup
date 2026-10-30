@@ -36,10 +36,11 @@
           <div id="setup-banner" class="setup-panel" hidden></div>
           <div id="question-notice" class="setup-panel" hidden><div><strong id="question-notice-title">Your agent has a question.</strong><p>Answer a question to immediately recheck its held emails.</p></div><button class="secondary" data-goto="questions">Answer questions →</button></div>
           <div class="metric-strip" aria-label="Mailbox statistics"><div><span class="metric-label">Unread in Primary</span><strong id="metric-unread">—</strong><small id="unread-caption">Connect to see your inbox</small></div><div><span class="metric-label">Emails tidied</span><strong id="metric-cleaned">—</strong><small>Confirmed cleanup actions</small></div><div><span class="metric-label">Unsubscribe requests sent</span><strong id="metric-unsubscribed">—</strong><small>Submitted to senders</small></div><div><span class="metric-label">Your daily routine</span><strong class="metric-word" id="metric-routine">Not set</strong><small id="routine-caption">A quieter inbox on autopilot</small></div></div>
+          <section class="overview-preferences" aria-label="Add or change preferences"><div id="overview-preference-composer"></div></section>
           <section class="agent-workspace">
   <div class="section-heading"><div><p class="eyebrow">YOUR INBOX AGENT</p><h2 id="agent-heading">Let’s get to know your inbox.</h2></div><span class="soft-tag" id="agent-status">Setup needed</span></div>
   <p id="agent-description">Choose what matters, then let the agent read and sort your unread mail. Nothing is deleted.</p>
-  <div class="agent-actions"><button class="primary" id="agent-configure" data-goto="rules">Set my preferences →</button><button class="primary" id="agent-start" disabled>Start my agent →</button></div>
+  <div class="agent-actions"><button class="secondary" id="agent-configure" data-goto="rules">Set my preferences →</button><button class="primary" id="agent-start" disabled>Start my agent →</button></div>
   <div id="agent-progress" hidden role="status" aria-live="polite"><div class="agent-motion" aria-hidden="true"><span>✉</span><i></i><span>✦</span><i></i><span>✓</span></div><p id="agent-stage">Ready</p><progress id="agent-meter" max="1" value="0"></progress><p id="agent-counts"></p></div>
   <div id="agent-decisions" class="agent-decisions"></div>
   <p class="agent-budget">Each cleanup checks up to 100 unread Primary emails. Daily cleanup is included.</p>
