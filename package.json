@@ -10,6 +10,7 @@
     "build": "npm run check:web && npm run build:web && npm run lint",
     "lint": "eslint .",
     "ai:check": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/check-ai.mjs",
+    "ai:benchmark": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/benchmark-nebius.mjs",
     "db:migrate": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/migrate.mjs",
     "build:web": "vite build --config web/vite.config.ts",
     "check:web": "tsc -p web/tsconfig.json",

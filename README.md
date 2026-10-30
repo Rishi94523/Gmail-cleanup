@@ -68,11 +68,18 @@ React + TypeScript + Vite; Node.js HTTP API; PostgreSQL on Neon (SQLite locally)
 npm test
 npm run build
 npm run ai:check
+npm run ai:benchmark
 ```
 
 `ai:check` uses a synthetic prompt without Gmail access. Tests cover permissions, account isolation, Primary-only queries, learned preferences, daily idempotency, uncertain writes, undo, unsubscribe validation and scheduler authentication. Browser QA uses fixture APIs; no real email modifications are claimed by those tests.
 
 OAuth refresh tokens, email context and preference memories are encrypted at rest. Discovery sends **no bodies**; cleanup sends up to **12,000 characters** of extracted email text per decision, without attachments. Each model request permits up to 50,000 output tokens. Prompt caching is automatic on the configured Nebius endpoint; diagnostic logs contain timings and token counts, not email contents or credentials.
+
+### Prompt caching and model speed
+
+[Nebius prompt caching](https://docs.tokenfactory.nebius.com/cached-tokens) is implicit and best-effort: no opt-in flag, explicit cache marker, or TTL is needed. Inboxclean puts stable instructions first, then shared user preferences, then individual emails. Discovery dates and user notes are separate from system instructions. Identical batch-wide context is sent once; email-specific instructions and exceptions remain attached to their email. Existing logs report `cachedPromptTokens` from the API, so a zero-hit request remains visible rather than being assumed cached.
+
+`npm run ai:benchmark` makes three streaming requests per model (Super 3.5 VL and Ultra 3), using the same ten synthetic emails and the production prompt/request builders. It never reads the database or Gmail. It records first-token latency, time to visible JSON, total duration, provider-reported token counts, approximate generation tokens/second and cache hits in ignored `data/nebius-benchmark-*.json` files. Super uses the application's medium reasoning setting; Ultra uses its provider default. Repeats test prefix reuse, but the first call is not guaranteed cold. Streaming token speed includes reasoning tokens when reported and does not measure classification accuracy, production capacity, or the whole Gmail cleanup. Set `BENCHMARK_ROUNDS` to 1–10 to change the request count; inference uses your normal API credits.
 
 ## Submission and remaining work
 

@@ -15,10 +15,52 @@ import {
   emailText,
   runAgent,
   learnInbox,
-  modelDecisionBatch
+  modelDecisionBatch,
+  batchPromptMessages
 } from '../server/agent.js';
 import { accessFor, restartTrial, reserveFreeEmail, trialSample } from '../server/access.js';
 import { confirmPrimaryInbox } from '../server/inbox-scope.js';
+
+test('batch context preserves each email and exception without duplicating identical account preferences', () => {
+  const shared = { action: 'read', exceptions: 'Keep apple.example announcements' };
+  const inputs = [
+    {
+      id: 'gmail-a',
+      preferences: shared,
+      userContext: 'Design work',
+      currentClock: { now: '2026-10-30' },
+      learnedPreference: { action: 'keep', instructions: 'Keep Apple' },
+      sender: 'news@apple.example',
+      text: 'First mail'
+    },
+    {
+      id: 'gmail-b',
+      preferences: shared,
+      userContext: 'Design work',
+      currentClock: { now: '2026-10-30' },
+      learnedPreference: { action: 'read', instructions: 'Read other product news' },
+      sender: 'news@other.example',
+      text: 'Second mail'
+    }
+  ];
+  const messages = batchPromptMessages('Classify.', inputs);
+  const context = JSON.parse(messages[1].content).sharedContext;
+  const emails = JSON.parse(messages.at(-1).content);
+  assert.deepEqual(context.preferences, shared);
+  assert.equal(Object.hasOwn(context, 'learnedPreference'), false);
+  for (let i = 0; i < inputs.length; i++) {
+    assert.equal(Object.hasOwn(emails[i], 'preferences'), false);
+    assert.deepEqual({ ...context, ...emails[i] }, { ...inputs[i], id: `email_${i + 1}` });
+  }
+  const next = batchPromptMessages(
+    'Classify.',
+    inputs.map(item => ({ ...item, currentClock: { now: '2026-10-31' } }))
+  );
+  assert.equal(messages[0].content, next[0].content);
+  const different = batchPromptMessages('Classify.', [inputs[0], { ...inputs[1], preferences: { action: 'keep' } }]);
+  assert.equal(Object.hasOwn(JSON.parse(different[1].content).sharedContext, 'preferences'), false);
+  assert.equal(JSON.parse(different.at(-1).content)[1].preferences.action, 'keep');
+});
 
 function fixture(t, patch = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'inboxclean-agent-'));
@@ -497,7 +539,7 @@ test('discovery asks about Primary mail that also carries the Updates label', as
   };
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, options) => {
-    const id = JSON.parse(JSON.parse(options.body).messages[1].content).find(m => /trial/.test(m.subject))?.id;
+    const id = JSON.parse(JSON.parse(options.body).messages.at(-1).content).find(m => /trial/.test(m.subject))?.id;
     return Response.json({
       choices: [
         {
@@ -562,7 +604,7 @@ test('batched agent handles 45 approved low-priority messages in five model call
     peak = Math.max(peak, active);
     const body = JSON.parse(options.body);
     assert.equal(body.max_tokens, 50000);
-    const items = JSON.parse(body.messages[1].content);
+    const items = JSON.parse(body.messages.at(-1).content);
     assert.ok(items.length <= 10);
     await new Promise(resolve => setTimeout(resolve, 5));
     active--;
@@ -683,7 +725,7 @@ test('grouped discovery preserves evidence through alias mapping and topic selec
   let calls = 0;
   globalThis.fetch = async (_url, options) => {
     calls++;
-    const input = JSON.parse(JSON.parse(options.body).messages[1].content);
+    const input = JSON.parse(JSON.parse(options.body).messages.at(-1).content);
     if (input[0].candidateId) {
       assert.equal(input.length, 2, 'Exact topic duplicates must be combined before the merge call');
       assert.equal(input.find(item => item.category === 'sales_discounts').minAgeDays, 90);
@@ -740,7 +782,7 @@ test('discovery fetches headers only and never sends bodies or snippets to the m
   globalThis.fetch = async (_url, options) => {
     assert.ok(!options.body.includes(secretBody));
     const body = JSON.parse(options.body);
-    const input = JSON.parse(body.messages[1].content);
+    const input = JSON.parse(body.messages.at(-1).content);
     for (const item of input)
       for (const field of ['text', 'body', 'snippet', 'payload']) assert.equal(Object.hasOwn(item, field), false);
     return Response.json({
@@ -822,7 +864,7 @@ test('low-confidence named-category batch results get one focused retry with ind
     calls++;
     if (calls === 2) {
       assert.match(request.messages[0].content, /CATEGORY CLARIFICATION PASS/);
-      const items = JSON.parse(request.messages[1].content);
+      const items = JSON.parse(request.messages.at(-1).content);
       assert.equal(items.length, 1);
       assert.equal(items[0].subject, 'Synthetic weekly report');
     }
@@ -1057,8 +1099,11 @@ test('discovery supplies from address, sent/received dates, trustworthy age and 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, options) => {
     const body = JSON.parse(options.body);
-    assert.match(body.messages[0].content, /Current clock:.*currentDate/);
-    const sample = JSON.parse(body.messages[1].content);
+    assert.doesNotMatch(body.messages[0].content, /User background notes.*\d{4}-\d{2}-\d{2}/);
+    const context = JSON.parse(body.messages[1].content).discoveryContext;
+    assert.ok(context.currentClock.currentDate);
+    assert.ok(context.currentClock.now);
+    const sample = JSON.parse(body.messages.at(-1).content);
     const email = sample.find(item => item.subject === 'Bank transaction confirmation');
     assert.equal(email.fromAddress, 'noise@example.invalid');
     assert.equal(email.sentAt, '2001-01-01T12:00:00.000Z');
@@ -1366,7 +1411,7 @@ test('hackathon daily agent runs with saved consent once per account-local day',
   let calls = 0;
   globalThis.fetch = async (_url, options) => {
     calls++;
-    const items = JSON.parse(JSON.parse(options.body).messages[1].content);
+    const items = JSON.parse(JSON.parse(options.body).messages.at(-1).content);
     return Response.json({
       choices: [
         {
@@ -1457,7 +1502,7 @@ test('completed AI batches modify emails before a slow sibling fails, and the ru
   });
   const previous = globalThis.fetch;
   globalThis.fetch = async (_url, options) => {
-    const inputs = JSON.parse(JSON.parse(options.body).messages[1].content);
+    const inputs = JSON.parse(JSON.parse(options.body).messages.at(-1).content);
     if (inputs[0].subject.startsWith('Slow')) {
       await slowGate;
       return Response.json({}, { status: 503 });

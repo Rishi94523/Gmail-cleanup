@@ -23,7 +23,9 @@ export function missingAIKey() {
 export function chatJSON(...args) {
   return timed('ai.request', () => chatJSONInternal(...args));
 }
-async function chatJSONInternal(config, messages, fetcher = fetch, tools = []) {
+// Shared by production and the synthetic streaming benchmark so endpoint,
+// reasoning, tools and output settings cannot drift between the two.
+export function chatRequest(config, messages, tools = []) {
   const provider = config.aiProvider || 'nebius';
   if (provider !== 'nebius') throw new Error('Unsupported AI provider.');
   if (!config.aiKey) throw new Error(missingAIKey(config));
@@ -32,6 +34,24 @@ async function chatJSONInternal(config, messages, fetcher = fetch, tools = []) {
   const mediumReasoning =
     /Nemotron-3\.5-Super-VL/i.test(config.aiModel || '') && config.aiReasoningEffort !== 'regular';
   const requestedReasoningEffort = mediumReasoning ? 'medium' : 'provider_default';
+  return {
+    url,
+    requestedReasoningEffort,
+    body: {
+      model: config.aiModel,
+      max_tokens: 50000,
+      temperature: 0,
+      ...(mediumReasoning
+        ? { reasoning_effort: 'medium', chat_template_kwargs: { enable_thinking: true, medium_effort: true } }
+        : {}),
+      ...(tools.length ? { tools, tool_choice: 'auto' } : { response_format: { type: 'json_object' } }),
+      messages
+    }
+  };
+}
+async function chatJSONInternal(config, messages, fetcher = fetch, tools = []) {
+  const provider = config.aiProvider || 'nebius';
+  const { url, body, requestedReasoningEffort } = chatRequest(config, messages, tools);
   const started = Date.now();
   let response;
   try {
@@ -42,16 +62,7 @@ async function chatJSONInternal(config, messages, fetcher = fetch, tools = []) {
       redirect: 'error',
       signal: AbortSignal.timeout(120000),
       headers: { Authorization: `Bearer ${config.aiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: config.aiModel,
-        max_tokens: 50000,
-        temperature: 0,
-        ...(mediumReasoning
-          ? { reasoning_effort: 'medium', chat_template_kwargs: { enable_thinking: true, medium_effort: true } }
-          : {}),
-        ...(tools.length ? { tools, tool_choice: 'auto' } : { response_format: { type: 'json_object' } }),
-        messages
-      })
+      body: JSON.stringify(body)
     });
   } catch {
     console.warn(

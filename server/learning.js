@@ -311,8 +311,8 @@ export async function interpretPreference(service, id, input) {
         allowedActions: allowed,
         minimumAgeDays: question.scope.minimumAgeDays || 0,
         suggestedMinAgeDays: question.minAgeDays || 0,
-        clock: clockContext(account.rules.timezone),
-        answer: input.text.trim()
+        answer: input.text.trim(),
+        clock: clockContext(account.rules.timezone)
       })
     }
   ]);
@@ -493,16 +493,16 @@ export async function interpretNotes(service, id, input) {
     {
       role: 'user',
       content: JSON.stringify({
-        text,
-        conversation,
-        clock: clockContext(account.rules.timezone),
         standardTopics: PREFERENCE_CATEGORIES,
         existing: snapshot.memories.map(m => ({
           scope: m.scope,
           action: m.action,
           minAgeDays: m.minAgeDays,
           instructions: m.instructions
-        }))
+        })),
+        conversation,
+        text,
+        clock: clockContext(account.rules.timezone)
       })
     }
   ]);
