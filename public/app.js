@@ -583,7 +583,7 @@ async function startAgent(onEvent = () => {}) {
           );
           while ($('#agent-decisions').children.length > 8) $('#agent-decisions').lastElementChild.remove();
           $('#agent-counts').textContent =
-            `${number(event.inspected)} read · ${number(event.changed)} changed · ${number(event.kept - (event.waiting || 0))} kept${event.waiting ? ` · ${number(event.waiting)} need review` : ''}`;
+            `${number(event.inspected)} read · ${number(event.changed)} changed · ${number(event.kept)} kept${event.waiting ? ` · ${number(event.waiting)} awaiting your answer` : ''}`;
         }
         if (event.type === 'complete') {
           completed = true;
@@ -591,7 +591,7 @@ async function startAgent(onEvent = () => {}) {
             ? 'Run finished. More unread mail remains.'
             : 'Run finished.';
           $('#agent-counts').textContent =
-            `${number(event.inspected)} inspected · ${number(event.changed)} changed · ${number(event.kept - (event.waiting || 0))} kept${event.waiting ? ` · ${number(event.waiting)} need review` : ''} · ${number(event.unsubscribed)} unsubscribe requests`;
+            `${number(event.inspected)} inspected · ${number(event.changed)} changed · ${number(event.kept)} kept${event.waiting ? ` · ${number(event.waiting)} awaiting your answer` : ''} · ${number(event.unsubscribed)} unsubscribe requests`;
         }
       }
     }

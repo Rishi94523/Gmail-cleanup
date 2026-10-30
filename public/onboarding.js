@@ -253,14 +253,14 @@ export function createOnboarding({ getState, request, refresh, startAgent, showP
         if (event.type === 'stage') panel.querySelector('.ob-thinking-line').textContent = event.message;
         if (event.type === 'decision') {
           const copy = panel.querySelector('.ob-copy');
-          copy.textContent = `${event.inspected} checked · ${event.changed} tidied · ${event.kept - (event.waiting || 0)} kept${event.waiting ? ` · ${event.waiting} need review` : ''}`;
+          copy.textContent = `${event.inspected} checked · ${event.changed} tidied · ${event.kept} kept${event.waiting ? ` · ${event.waiting} awaiting your answer` : ''}`;
           panel.querySelector('.ob-thinking-line').textContent = event.reason || 'Considering what matters.';
         }
         if (event.type === 'complete') complete = event;
       });
       working = false;
       render(
-        `<p class="ob-kicker">${complete?.waiting ? 'SOME EMAILS STILL NEED YOUR INPUT' : 'CLEANUP COMPLETE'}</p><h1>${complete?.changed ? 'Your first fresh start.' : 'No emails were changed.'}</h1><p class="ob-copy">${complete?.inspected || 0} checked · ${complete?.changed || 0} tidied · ${(complete?.kept || 0) - (complete?.waiting || 0)} kept${complete?.waiting ? ` · ${complete.waiting} need review` : ''}</p><p class="ob-detail">${complete?.waiting ? 'Questions and uncertain classifications left emails untouched. See what the agent needs in your workspace.' : 'Your preferences, activity, and undo are waiting in your workspace.'}</p><button class="primary ob-primary" id="ob-dashboard">${complete?.waiting ? 'Review questions' : 'Open my workspace'} →</button>`
+        `<p class="ob-kicker">${complete?.waiting ? 'SOME EMAILS STILL NEED YOUR INPUT' : 'CLEANUP COMPLETE'}</p><h1>${complete?.changed ? 'Your first fresh start.' : 'No emails were changed.'}</h1><p class="ob-copy">${complete?.inspected || 0} checked · ${complete?.changed || 0} tidied · ${complete?.kept || 0} kept${complete?.waiting ? ` · ${complete.waiting} awaiting your answer` : ''}</p><p class="ob-detail">${complete?.waiting ? 'Emails awaiting your answer were left unchanged. Answer the saved questions in your workspace.' : 'Your preferences, activity, and undo are waiting in your workspace.'}</p><button class="primary ob-primary" id="ob-dashboard">${complete?.waiting ? 'Review questions' : 'Open my workspace'} →</button>`
       );
       panel.querySelector('button').onclick = () => close(complete?.waiting ? 'questions' : 'overview');
     } catch (error) {

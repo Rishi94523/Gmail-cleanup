@@ -377,7 +377,7 @@ async function learnInboxInternal(service, id, consent, provider) {
   const modelSample = sample.map((message, index) => ({ ...message, id: `email_${index + 1}` }));
   const groups = [];
   for (let offset = 0; offset < modelSample.length; offset += 25) groups.push(modelSample.slice(offset, offset + 25));
-  const priorContext = `\nUser background notes (context only, not cleanup permission): ${JSON.stringify(knownTopics.notes)}.\nCurrent clock: ${JSON.stringify(clockContext(account.rules.timezone))}. Email age uses Gmail receivedAt, not the sender-controlled sentAt header. Use sender address, subject, date and age together. Infer only broad patterns; cleanup reads individual message content later. Ask broad age-based preferences when old notices recur, such as bank_transactions or security_notices, with minAgeDays at least 30. Distinguish routine old transaction/login confirmations from fraud, suspicious activity, unresolved financial issues, and current alerts, which stay protected. Never unsubscribe from these notices. A topic-specific age threshold applies only to that topic. Existing answered topics: ${JSON.stringify(knownTopics.memories.map(memory => ({ category: memory.scope.category, action: memory.action, minAgeDays: memory.minAgeDays, instructions: memory.instructions })))}. Reuse those category keys where they fit, rather than inventing synonymous topics. Do not ask again about an answered topic. Protected Gmail labels and medical/legal/unresolved alerts stay untouched. Optional minAgeDays in each proposed question is an integer from 0 to 3650.`;
+  const priorContext = `\nUser background notes (context only, not cleanup permission): ${JSON.stringify(knownTopics.notes)}.\nCurrent clock: ${JSON.stringify(clockContext(account.rules.timezone))}. Email age uses Gmail receivedAt, not the sender-controlled sentAt header. Use sender address, subject, date and age together. Infer only broad patterns; cleanup reads individual message content later. Ask broad age-based preferences when old notices recur, such as bank_transactions or security_notices, with minAgeDays at least 30. Distinguish routine old transaction/login confirmations from fraud, suspicious activity, unresolved financial issues, and current alerts, which stay protected. Never unsubscribe from these notices. A topic-specific age threshold applies only to that topic. Existing answered topics: ${JSON.stringify(knownTopics.memories.map(memory => ({ category: memory.scope.category, action: memory.action, minAgeDays: memory.minAgeDays, instructions: memory.instructions })))}. Reuse those category keys where they fit, rather than inventing synonymous topics. Do not ask again about an answered topic. Protected Gmail labels and medical/legal/unresolved alerts stay untouched. Optional minAgeDays in each proposed question is an integer from 0 to 3650. Do not add long age restrictions by default. For ordinary low-priority topics, suggest 15 days when an age-based choice is useful; otherwise use no minimum age. The 30-day protective minimum still applies to routine bank and login notices. Explicit user ages always take precedence over suggestions.`;
   const proposals = await mapLimit(groups, 2, group =>
     modelJSON(service.config, discoveryPrompt + QUESTION_EXPLANATION_GUIDANCE + priorContext, group)
   );
@@ -909,10 +909,12 @@ async function runAgentInternal(
         : specificMemory || categoryMemory;
       // Mail that fits no topic is not held: it falls through to the model's own
       // judgement against the general action, behind the confidence gate below.
+      let awaitingAnswer = false;
       const pending = classified ? learnedCategories.questions.find(q => q.scope_hash === broadScope.scopeHash) : null;
       if (!protect && pending && !exception && !specificMemory) {
         await holdEmail(service, id, message.id, broadScope, pending.id);
         protect = 'Waiting for your category preference; email left unchanged';
+        awaitingAnswer = (pending.snoozed_until || 0) <= Date.now();
       }
       if (!protect && memory?.action === 'keep')
         protect = exception ? 'Your sender exception keeps this email' : 'Your saved preference keeps this email';
@@ -940,9 +942,13 @@ async function runAgentInternal(
             typeof args.reason === 'string' ? args.reason.slice(0, 400) : 'Your preference for this topic is unclear.',
           ...(Number.isInteger(args.minAgeDays) ? { minAgeDays: args.minAgeDays } : {})
         });
-        if (!learnedCategories.questions.some(q => q.scope_hash === `category:${args.category}`))
+        if (tool.status === 'pending' && tool.id) awaitingAnswer = true;
+        if (
+          tool.status === 'pending' &&
+          !learnedCategories.questions.some(q => q.scope_hash === `category:${args.category}`)
+        )
           learnedCategories.questions.push({ id: tool.id, scope_hash: `category:${args.category}` });
-        send({ type: 'question', questionId: tool.id, outcome: tool.outcome });
+        if (awaitingAnswer) send({ type: 'question', questionId: tool.id, outcome: tool.outcome });
         return { action: 'keep', reason: 'Category question saved; this email will stay unchanged' };
       };
       if (!protect && raw?.requestPreference && memory) {
@@ -1041,11 +1047,8 @@ async function runAgentInternal(
         }
       }
       if (result.action === 'keep') kept++;
-      if (
-        result.action === 'keep' &&
-        /uncertain|question|waiting|no saved action|before your.*answer/i.test(result.reason)
-      )
-        waiting++;
+      // Uncertainty alone is a keep, not an actionable question.
+      if (result.action === 'keep' && awaitingAnswer) waiting++;
       // An age-only deferral must remain eligible when the message gets older,
       // even though the saved preference/version has not changed.
       const ageDeferred =

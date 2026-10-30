@@ -613,7 +613,7 @@ test('incomplete model batch cannot modify any message in that window', async t 
     });
   try {
     const result = await f.service.locked(f.id, guard => runAgent(f.service, f.id, guard));
-    assert.ok(result.waiting > 0);
+    assert.equal(result.waiting, 0, 'Malformed or uncertain results are kept, not presented as nonexistent questions');
     assert.equal(f.writes.length, 0);
   } finally {
     globalThis.fetch = originalFetch;
@@ -1507,4 +1507,34 @@ test('completed AI batches modify emails before a slow sibling fails, and the ru
     if (run) await run.catch(() => {});
     globalThis.fetch = previous;
   }
+});
+
+test('uncertain keeps never imply pending questions, but saved questions retain an actionable count', async t => {
+  const f = fixture(t, { keepPeople: false, topicActions: false });
+  const result = await f.service.locked(f.id, guard =>
+    runAgent(f.service, f.id, guard, undefined, 'manual', async () => ({
+      action: 'keep',
+      confidence: 1,
+      reason: 'Uncertain; left unchanged without another question'
+    }))
+  );
+  assert.equal(result.kept, 4);
+  assert.equal(result.waiting, 0);
+  assert.equal(f.store.get('SELECT count(*) AS count FROM agent_questions WHERE account_id=?', f.id).count, 0);
+  const g = fixture(t, { keepPeople: false, topicActions: true });
+  const asked = await g.service.locked(g.id, guard =>
+    runAgent(g.service, g.id, guard, undefined, 'manual', async () => ({
+      requestPreference: {
+        category: 'product_announcements',
+        question: 'How should I handle announcements?',
+        reason: 'A broad topic preference is needed.'
+      }
+    }))
+  );
+  assert.equal(asked.kept, 4);
+  assert.equal(asked.waiting, 3);
+  assert.equal(
+    g.store.get("SELECT count(*) AS count FROM agent_questions WHERE account_id=? AND status='pending'", g.id).count,
+    1
+  );
 });

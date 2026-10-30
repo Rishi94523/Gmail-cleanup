@@ -90,7 +90,7 @@ export async function categoryContext(service, id) {
       id
     ),
     service.store.all(
-      "SELECT id,scope_hash FROM agent_questions WHERE account_id=? AND status='pending' AND scope_hash LIKE 'category:%'",
+      "SELECT id,scope_hash,snoozed_until FROM agent_questions WHERE account_id=? AND status='pending' AND scope_hash LIKE 'category:%'",
       id
     ),
     service.store.all(
