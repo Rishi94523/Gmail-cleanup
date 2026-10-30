@@ -89,4 +89,14 @@ The display brand remains **Inboxclean** on `cleanmyinbox.space`. The homepage i
 
 This public repository is the hackathon source. Keep a tag pointing to the exact submitted commit; build a separate private repository later if commercial/payment work needs to stay private.
 
-The live OAuth app currently accepts configured Google test users. Public Gmail onboarding still needs Google's applicable verification process. Payment checkout, browser-based unsubscribe and bulk backlog processing are outside this hackathon version. The [official rules](https://nebiusglobalaihackathon.devpost.com/rules) also require an open-source license. License selection is pending; this must be resolved before submission. A real submission demo video and the event's required feedback must be prepared separately; the landing animation is an illustrative product demo.
+The live OAuth app currently accepts configured Google test users. Public Gmail onboarding still needs Google's applicable verification process. Payment checkout, browser-based unsubscribe and bulk backlog processing are outside this hackathon version. The repository includes an open-source license as required by the [official rules](https://nebiusglobalaihackathon.devpost.com/rules). The landing animation is illustrative; use a recording of the working application for submission and complete the event's required feedback.
+
+## License
+
+Copyright © 2026 Rishi (Rishi94523).
+
+Original project source code in this repository is licensed under the **GNU Affero General Public License, version 3 only** (`AGPL-3.0-only`). See [LICENSE](LICENSE) for the complete, unmodified license text. Third-party dependencies, models, and services retain their own licenses and terms.
+
+AGPL permits commercial use, modification and redistribution, with strong copyleft obligations. In particular, someone who modifies this application and makes that modified version available for remote network interaction must offer its corresponding source to those users under AGPL. This is stronger protection for a web application than MIT, Apache 2.0, MPL 2.0, or GPL's distribution-triggered copyleft; it is not a ban on commercial use.
+
+The existing release remains available under its granted license even if later versions are developed privately. The license does not grant rights to third-party trademarks or imply endorsement by Google, NVIDIA, or Nebius.
