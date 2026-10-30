@@ -69,6 +69,7 @@ try {
   let learned = false;
   let ran = false;
   let repairRequested = false;
+  let interpretationCalls = 0;
   let notesPreview;
   let notesSaved = false;
   await page.route('**/api/**', async route => {
@@ -116,7 +117,18 @@ try {
     } else if (path === '/api/agent/questions/interpret') {
       const data = route.request().postDataJSON();
       assert.match(data.text, /90 days/);
-      json = { supported: true, action: 'archive', minAgeDays: 90, instructions: data.text };
+      interpretationCalls++;
+      json =
+        interpretationCalls === 1
+          ? {
+              supported: false,
+              clarification: 'Should I archive announcements immediately or only after 90 days?',
+              clarificationOptions: [
+                'Archive immediately, keeping Apple announcements.',
+                'Archive after 90 days, keeping Apple announcements.'
+              ]
+            }
+          : { supported: true, action: 'archive', minAgeDays: 90, instructions: data.text };
     } else if (path === '/api/agent/questions/answer') {
       const data = route.request().postDataJSON();
       assert.notEqual(data.questionId, 'unsupported-job');
@@ -267,6 +279,13 @@ try {
     .getByRole('textbox', { name: 'Your written preference' })
     .fill('Archive product announcements after 90 days, but keep Apple announcements.');
   await page.getByRole('button', { name: /Understand my answer/ }).click();
+  await page.locator('.clarification-thread').waitFor();
+  assert.equal(await page.getByRole('textbox', { name: 'Your written preference' }).inputValue(), '');
+  assert.match(await page.locator('.clarification-user').innerText(), /keep Apple announcements/);
+  assert.equal(tray.memories.length, 0);
+  assert.equal(ran, false);
+  await check('clarification-thread');
+  await page.getByRole('button', { name: 'Archive after 90 days, keeping Apple announcements.', exact: true }).click();
   await page.locator('.custom-summary').waitFor();
   await check('written-preview');
   assert.equal(tray.memories.length, 0, 'Interpretation must not save a preference');

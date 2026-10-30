@@ -301,7 +301,7 @@ export async function interpretPreference(service, id, input) {
     {
       role: 'system',
       content:
-        'Interpret the user-written answer to one inbox preference question. Propose only an explicitly requested allowed action and an age in whole days. Do not invent permissions from a vague answer. Preserve conditions and exceptions in the original answer; do not claim they can override protected labels, recent sensitive notices, medical/legal mail, or unresolved fraud/security issues. Never delete, trash, send or unsubscribe. If the answer requests unsupported actions, contradicts itself, lacks an action, or cannot be represented by one topic action plus an age threshold and written conditions, return JSON {"supported":false,"clarification":"one short question or explanation"}. Otherwise return JSON {"supported":true,"action":"keep|read|archive|both","minAgeDays":0}. The user will see and confirm the proposal before it is saved. No email changes are authorized by this interpretation.'
+        'Interpret the user-written answer to one inbox preference question. Propose only an explicitly requested allowed action and an age in whole days. Suggested ages in the question are not requirements: an explicit user request for immediately, all ages, or the same day means minAgeDays=0 unless minimumAgeDays requires a protective floor. The answer may contain a conversation: use the user replies to resolve the agent follow-up questions, preserving earlier user conditions that were not changed. Do not ask again when the user has already clearly resolved the age. Do not invent permissions from a vague answer. Preserve conditions and exceptions in the original answer; do not claim they can override protected labels, recent sensitive notices, medical/legal mail, or unresolved fraud/security issues. Never delete, trash, send or unsubscribe. If the answer requests unsupported actions, contradicts itself, lacks an action, or cannot be represented by one topic action plus an age threshold and written conditions, return JSON {"supported":false,"clarification":"one short question or explanation","clarificationOptions":["a complete self-contained reply","another complete reply"]}. Offer two to four concise mutually exclusive reply options when the ambiguity has clear alternatives; otherwise omit clarificationOptions. Options are only replies for another interpretation, never authorization to act. Otherwise return JSON {"supported":true,"action":"keep|read|archive|both","minAgeDays":0}. The user will see and confirm the proposal before it is saved. No email changes are authorized by this interpretation.'
     },
     {
       role: 'user',
@@ -319,6 +319,11 @@ export async function interpretPreference(service, id, input) {
   if (result.supported !== true)
     return {
       supported: false,
+      clarificationOptions: Array.isArray(result.clarificationOptions)
+        ? result.clarificationOptions
+            .filter(option => typeof option === 'string' && option.trim() && option.length <= 180)
+            .slice(0, 4)
+        : [],
       clarification:
         typeof result.clarification === 'string'
           ? result.clarification.slice(0, 300)

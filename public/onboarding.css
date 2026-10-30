@@ -732,3 +732,85 @@ body.onboarding-open > #toast {
 .ob-review-navigation button {
   min-height: 44px;
 }
+
+.clarification-thread {
+  max-height: 180px;
+  overflow-y: auto;
+  margin: 12px 0;
+  text-align: left;
+}
+.clarification-thread p {
+  margin: 5px 0 0;
+}
+.clarification-user,
+.clarification-agent {
+  padding: 12px 14px;
+  border-radius: 10px;
+  margin-bottom: 10px;
+  font-size: 16px;
+  line-height: 1.5;
+}
+.clarification-user {
+  background: #e8efdf;
+  margin-left: 22px;
+}
+.clarification-agent {
+  background: #eef1e9;
+  margin-right: 22px;
+}
+.clarification-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+.clarification-options button {
+  min-height: 44px;
+  white-space: normal;
+  text-align: left;
+}
+.ob-panel:has(.clarification-thread) > .ob-agents,
+.ob-panel:has(.clarification-thread) .ob-evidence {
+  display: none;
+}
+@media (max-height: 740px) {
+  .clarification-thread {
+    max-height: 125px;
+  }
+  .clarification-options button {
+    font-size: 14px;
+    padding: 8px 10px;
+  }
+}
+
+@media (max-height: 740px), (max-width: 760px) {
+  .ob-panel:has(.clarification-thread) h1 {
+    font-size: 24px;
+    margin-bottom: 10px;
+  }
+  .ob-panel:has(.clarification-thread) .custom-hint {
+    display: none;
+  }
+  .ob-panel:has(.clarification-thread) textarea {
+    min-height: 58px;
+    height: 58px;
+    padding: 8px;
+  }
+  .ob-panel:has(.clarification-thread) .clarification-thread {
+    max-height: 95px;
+    margin: 8px 0;
+  }
+  .ob-panel:has(.clarification-thread) .clarification-user,
+  .ob-panel:has(.clarification-thread) .clarification-agent {
+    font-size: 14px;
+    padding: 8px;
+  }
+}
+
+@media (max-height: 640px) {
+  .ob-panel:has(.clarification-thread) h1,
+  .ob-panel:has(.clarification-thread) .ob-kicker,
+  .ob-panel:has(.clarification-thread) .ob-detail {
+    display: none;
+  }
+}

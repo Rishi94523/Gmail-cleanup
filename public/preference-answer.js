@@ -15,24 +15,52 @@ export function answerCleanupMessage(result) {
 
 export function writePreference(container, { question, request, onSaved, onCancel }) {
   let text = '';
+  let history = [];
+  let choices = [];
   let proposal;
   let busy = false;
   function render(message = '') {
-    container.innerHTML = `<div class="custom-answer"><label>Your answer<textarea aria-label="Your written preference" maxlength="2000" rows="3" ${proposal ? 'readonly' : ''} placeholder="For example: mark these read after 90 days, but keep unusual activity alerts.">${escape(text)}</textarea></label>${proposal ? `<p class="custom-summary"><strong>${escape(actions[proposal.action])}</strong> · ${proposal.minAgeDays ? `only after ${proposal.minAgeDays} days` : 'no age threshold'}</p><p class="custom-hint">Your written conditions will also guide the agent. Protected mail stays protected.</p>` : '<p class="custom-hint">Describe the action, age, and any exceptions. You’ll confirm before it’s saved.</p>'}<p class="custom-error" role="status">${escape(message)}</p><div class="custom-buttons"><button type="button" class="primary" data-custom-submit>${proposal ? 'Save this preference' : 'Understand my answer'} →</button><button type="button" class="text-button" data-custom-back>${proposal ? 'Edit answer' : 'Back to choices'}</button></div></div>`;
+    container.innerHTML = `<div class="custom-answer">${history.length && !proposal ? `<div class="clarification-thread" aria-label="Preference conversation">${history.map(turn => `<div class="clarification-user"><strong>You</strong><p>${escape(turn.answer)}</p></div><div class="clarification-agent"><strong>Your agent</strong><p>${escape(turn.question)}</p></div>`).join('')}</div>${choices.length ? `<div class="clarification-options" aria-label="Suggested replies">${choices.map((choice, index) => `<button type="button" class="secondary" data-reply="${index}">${escape(choice)}</button>`).join('')}</div>` : ''}` : ''}<label>${history.length ? 'Your reply' : 'Your answer'}<textarea aria-label="Your written preference" maxlength="2000" rows="3" ${proposal ? 'readonly' : ''} placeholder="For example: mark these read after 90 days, but keep unusual activity alerts.">${escape(proposal?.instructions || text)}</textarea></label>${proposal ? `<p class="custom-summary"><strong>${escape(actions[proposal.action])}</strong> · ${proposal.minAgeDays ? `only after ${proposal.minAgeDays} days` : 'no age threshold'}</p><p class="custom-hint">Your written conditions will also guide the agent. Protected mail stays protected.</p>` : '<p class="custom-hint">Describe the action, age, and any exceptions. You’ll confirm before it’s saved.</p>'}<p class="custom-error" role="status">${escape(message)}</p><div class="custom-buttons"><button type="button" class="primary" data-custom-submit>${proposal ? 'Save this preference' : history.length ? 'Send reply' : 'Understand my answer'} →</button><button type="button" class="text-button" data-custom-back>${proposal ? 'Edit answer' : history.length ? 'Rewrite my answer' : 'Back to choices'}</button></div></div>`;
+    const conversation = container.querySelector('.clarification-thread');
+    if (conversation) conversation.scrollTop = conversation.scrollHeight;
     const field = container.querySelector('textarea');
     field.oninput = () => {
       text = field.value;
     };
+    container.querySelectorAll('[data-reply]').forEach(button => {
+      button.onclick = () => {
+        if (busy) return;
+        text = choices[Number(button.dataset.reply)];
+        field.value = text;
+        container.querySelector('[data-custom-submit]').click();
+      };
+    });
     container.querySelector('[data-custom-back]').onclick = () => {
       if (busy) return;
       if (proposal) {
+        text = proposal.instructions;
+        history = [];
+        choices = [];
         proposal = null;
+        render();
+      } else if (history.length) {
+        text = [...history.map(turn => turn.answer), text.trim()].filter(Boolean).join('\n');
+        history = [];
+        choices = [];
         render();
       } else onCancel();
     };
     container.querySelector('[data-custom-submit]').onclick = async () => {
       if (busy) return;
       if (!text.trim()) return render('Write your preference first.');
+      const interpretation = history.length
+        ? [
+            ...history.map(turn => `User instructions: ${turn.answer}\nAgent follow-up: ${turn.question}`),
+            `User reply: ${text.trim()}`
+          ].join('\n')
+        : text.trim();
+      if (!proposal && interpretation.length > 2000)
+        return render('This conversation is too long. Choose Rewrite my answer and shorten it before continuing.');
       busy = true;
       container.querySelectorAll('button,textarea').forEach(element => {
         element.disabled = true;
@@ -46,18 +74,25 @@ export function writePreference(container, { question, request, onSaved, onCance
             option: 'custom',
             action: proposal.action,
             minAgeDays: proposal.minAgeDays,
-            instructions: text.trim()
+            instructions: proposal.instructions
           });
           await onSaved(result);
         } else {
           const result = await request('/api/agent/questions/interpret', {
             questionId: question.id,
             version: question.version,
-            text: text.trim()
+            text: interpretation
           });
           busy = false;
-          if (!result.supported) return render(result.clarification);
-          proposal = result;
+          if (!result.supported) {
+            history.push({ answer: text.trim(), question: result.clarification });
+            text = '';
+            choices = Array.isArray(result.clarificationOptions) ? result.clarificationOptions : [];
+            render();
+            container.querySelector('textarea').focus();
+            return;
+          }
+          proposal = { ...result, instructions: [...history.map(turn => turn.answer), text.trim()].join('\n') };
           render();
         }
       } catch (error) {
